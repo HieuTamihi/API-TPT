@@ -1,0 +1,9 @@
+.note-text {
+    word-wrap: break-word;
+    white-space: pre-line; 
+    max-width:300px;
+    overflow-wrap: break-word;
+}
+.wrapper-height{
+    min-height: 635px !important;
+}

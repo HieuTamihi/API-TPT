@@ -1,0 +1,5 @@
+/* Utility: single-line truncate with ellipsis */
+.truncate-1line{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+#head-nav{
+    background-color: #25406E;
+}
