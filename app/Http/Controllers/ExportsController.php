@@ -18,6 +18,8 @@ use Carbon\Carbon;
 use DateTime;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Auth;
 
 class ExportsController extends Controller
 {
@@ -36,8 +38,8 @@ class ExportsController extends Controller
         // Hỗ trợ phân trang và lọc qua query params để tìm kiếm giữa các trang
         $exports = $this->exports->paginateForIndex(request()->all(), 25);
         // Chỉ lấy các cột cần thiết để giảm tải
-        $users = User::select('id','name')->get();
-        $customers = Customers::select('id','customer_name')->get();
+        $users = User::select('id', 'name')->get();
+        $customers = Customers::select('id', 'customer_name')->get();
         return view('expertise.export.index', compact('title', 'exports', 'users', 'customers'));
     }
 
@@ -584,7 +586,11 @@ class ExportsController extends Controller
             // BOM để Excel mở UTF-8 chuẩn
             fprintf($file, chr(0xEF) . chr(0xBB) . chr(0xBF));
             fputcsv($file, [
-                'Mã phiếu', 'Ngày lập phiếu', 'Khách hàng', 'Người lập phiếu', 'Ghi chú',
+                'Mã phiếu',
+                'Ngày lập phiếu',
+                'Khách hàng',
+                'Người lập phiếu',
+                'Ghi chú',
             ]);
             foreach ($rows as $item) {
                 fputcsv($file, [
@@ -599,5 +605,208 @@ class ExportsController extends Controller
         };
 
         return response()->stream($callback, 200, $headers);
+    }
+
+    /**
+     * 1. Danh sách phiếu xuất kho (có lọc, phân trang)
+     */
+    public function list(Request $request)
+    {
+        try {
+            // Sử dụng hàm paginateForIndex đã có trong Model để tái sử dụng logic lọc/search
+            $data = $request->all();
+
+            //Giới hạn số lượng
+            $perPage = $request->input('limit', 20);
+
+            $exports = $this->exports->paginateForIndex($data, $perPage);
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Lấy danh sách phiếu xuất thành công',
+                'data' => $exports
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Lỗi hệ thống: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * 2. Chi tiết phiếu xuất kho
+     */
+    public function detail($id)
+    {
+        try {
+            // Eager load các quan hệ để lấy đầy đủ thông tin
+            $export = Exports::with([
+                'user:id,name',
+                'customer:id,customer_name,phone,address',
+                'warehouse:id,warehouse_name',
+                'productExport',                 // Danh sách sản phẩm trong phiếu
+                'productExport.product',         // Thông tin chi tiết sản phẩm
+                'productExport.serialNumber'     // Thông tin serial (nếu có)
+            ])->find($id);
+
+            if (!$export) {
+                return response()->json([
+                    'status' => false,
+                    'message' => 'Không tìm thấy phiếu xuất kho'
+                ], 404);
+            }
+
+            return response()->json([
+                'status' => true,
+                'data' => $export
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Lỗi hệ thống: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * 3. Tạo mới phiếu xuất kho
+     */
+    public function add(Request $request)
+    {
+        // Validate dữ liệu đầu vào
+        $validator = Validator::make($request->all(), [
+            'customer_id'    => 'required|exists:customers,id',
+            'date_create'    => 'required|date',
+            'user_id'        => 'nullable|exists:users,id', // Nếu không truyền sẽ lấy Auth user
+            'address'        => 'nullable|string',
+            'phone'          => 'nullable|string',
+            'contact_person' => 'nullable|string',
+            'note'           => 'nullable|string',
+            // 'warehouse_id' xử lý trong Model qua Helper nên không bắt buộc ở đây
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => false,
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        DB::beginTransaction();
+        try {
+            $data = $request->all();
+
+            // Nếu không truyền user_id, lấy từ người dùng đang đăng nhập
+            if (empty($data['user_id'])) {
+                $data['user_id'] = Auth::id() ?? 1; // Fallback ID 1 nếu test không có auth
+            }
+
+            // Gọi hàm addExport trong Model
+            $exportModel = new Exports();
+            $newExportId = $exportModel->addExport($data);
+
+            // Lấy lại đối tượng vừa tạo để trả về
+            $newExport = Exports::find($newExportId);
+
+            DB::commit();
+            return response()->json([
+                'status' => true,
+                'message' => 'Tạo phiếu xuất kho thành công',
+                'data' => $newExport
+            ], 201);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'status' => false,
+                'message' => 'Lỗi tạo phiếu: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * 4. Cập nhật phiếu xuất kho
+     */
+    public function change(Request $request, $id)
+    {
+        $export = Exports::find($id);
+
+        if (!$export) {
+            return response()->json(['status' => false, 'message' => 'Không tìm thấy phiếu xuất'], 404);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'customer_id'    => 'sometimes|exists:customers,id',
+            'date_create'    => 'sometimes|date',
+            'user_id'        => 'sometimes|exists:users,id',
+            'address'        => 'nullable|string',
+            'phone'          => 'nullable|string',
+            'contact_person' => 'nullable|string',
+            'note'           => 'nullable|string',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['status' => false, 'errors' => $validator->errors()], 422);
+        }
+
+        try {
+            // Cập nhật các trường được phép
+            $export->update($request->only([
+                'customer_id',
+                'user_id',
+                'date_create',
+                'address',
+                'phone',
+                'contact_person',
+                'note'
+            ]));
+
+            // Lưu ý: export_code và warehouse_id thường hạn chế sửa trực tiếp để đảm bảo tính toàn vẹn dữ liệu
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Cập nhật phiếu xuất thành công',
+                'data' => $export
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Lỗi cập nhật: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * 5. Xóa phiếu xuất kho
+     */
+    public function delete($id)
+    {
+        $export = Exports::find($id);
+
+        if (!$export) {
+            return response()->json(['status' => false, 'message' => 'Không tìm thấy phiếu xuất'], 404);
+        }
+
+        DB::beginTransaction();
+        try {
+            // 1. Xóa các sản phẩm chi tiết thuộc phiếu này trước (Nếu database không set Cascade)
+            // Giả sử tên bảng pivot/chi tiết là 'product_export'
+            DB::table('product_export')->where('export_id', $id)->delete();
+
+            // 2. Xóa phiếu xuất
+            $export->delete();
+
+            DB::commit();
+            return response()->json([
+                'status' => true,
+                'message' => 'Xóa phiếu xuất kho và dữ liệu liên quan thành công'
+            ], 200);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'status' => false,
+                'message' => 'Lỗi xóa phiếu: ' . $e->getMessage()
+            ], 500);
+        }
     }
 }
