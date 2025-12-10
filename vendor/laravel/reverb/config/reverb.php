@@ -31,7 +31,6 @@ return [
         'reverb' => [
             'host' => env('REVERB_SERVER_HOST', '0.0.0.0'),
             'port' => env('REVERB_SERVER_PORT', 8080),
-            'path' => env('REVERB_SERVER_PATH', ''),
             'hostname' => env('REVERB_HOST'),
             'options' => [
                 'tls' => [],
@@ -47,7 +46,6 @@ return [
                     'username' => env('REDIS_USERNAME'),
                     'password' => env('REDIS_PASSWORD'),
                     'database' => env('REDIS_DB', '0'),
-                    'timeout' => env('REDIS_TIMEOUT', 60),
                 ],
             ],
             'pulse_ingest_interval' => env('REVERB_PULSE_INGEST_INTERVAL', 15),

@@ -22,9 +22,20 @@ use App\Http\Controllers\SerialNumberController;
 use App\Http\Controllers\WarehouseTransferController;
 use App\Http\Controllers\WarrantyLookupController;
 use App\Http\Controllers\DatabaseController;
+use App\Http\Controllers\ProductWarrantiesController;
 use App\Http\Middleware\CorsMiddleware;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
+
+
+// Group route cho Imports
+Route::prefix('imports')->group(function () {
+    Route::get('/list', [ImportsController::class, 'list']);           // API Danh sách
+    Route::post('/add', [ImportsController::class, 'add']);             // API Tạo mới
+    Route::get('/detail/{id}', [ImportsController::class, 'detail']);   // API Xem chi tiết
+    Route::put('/change/{id}', [ImportsController::class, 'change']);   // API Cập nhật
+    Route::delete('/delete/{id}', [ImportsController::class, 'delete']); // API Xóa
+});
 
 // Database Management Routes (Admin only)
 Route::group(['middleware' => ['permission:admin']], function () {
@@ -187,5 +198,12 @@ Route::resource('/warehouseTransfer', WarehouseTransferController::class);
 
 //
 Route::post('/save-terms', [QuotationController::class, 'saveTerms'])->name('save-terms');
+
+//
+Route::get('/warranty/check', [WarrantyLookupController::class, 'checkWarranty']);
+
+//
+Route::get('/inventory/check', [InventoryLookupController::class, 'checkStock']);
+
 
 require __DIR__ . '/auth.php';

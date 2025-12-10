@@ -13,10 +13,10 @@ class UnauthorizedException extends HttpException
 
     public static function forRoles(array $roles): self
     {
-        $message = __('User does not have the right roles.');
+        $message = 'User does not have the right roles.';
 
         if (config('permission.display_role_in_exception')) {
-            $message .= ' '.__('Necessary roles are :roles', ['roles' => implode(', ', $roles)]);
+            $message .= ' Necessary roles are '.implode(', ', $roles);
         }
 
         $exception = new static(403, $message, null, []);
@@ -27,10 +27,10 @@ class UnauthorizedException extends HttpException
 
     public static function forPermissions(array $permissions): self
     {
-        $message = __('User does not have the right permissions.');
+        $message = 'User does not have the right permissions.';
 
         if (config('permission.display_permission_in_exception')) {
-            $message .= ' '.__('Necessary permissions are :permissions', ['permissions' => implode(', ', $permissions)]);
+            $message .= ' Necessary permissions are '.implode(', ', $permissions);
         }
 
         $exception = new static(403, $message, null, []);
@@ -41,10 +41,10 @@ class UnauthorizedException extends HttpException
 
     public static function forRolesOrPermissions(array $rolesOrPermissions): self
     {
-        $message = __('User does not have any of the necessary access rights.');
+        $message = 'User does not have any of the necessary access rights.';
 
         if (config('permission.display_permission_in_exception') && config('permission.display_role_in_exception')) {
-            $message .= ' '.__('Necessary roles or permissions are :values', ['values' => implode(', ', $rolesOrPermissions)]);
+            $message .= ' Necessary roles or permissions are '.implode(', ', $rolesOrPermissions);
         }
 
         $exception = new static(403, $message, null, []);
@@ -57,14 +57,12 @@ class UnauthorizedException extends HttpException
     {
         $class = get_class($user);
 
-        return new static(403, __('Authorizable class `:class` must use Spatie\\Permission\\Traits\\HasRoles trait.', [
-            'class' => $class,
-        ]), null, []);
+        return new static(403, "Authorizable class `{$class}` must use Spatie\Permission\Traits\HasRoles trait.", null, []);
     }
 
     public static function notLoggedIn(): self
     {
-        return new static(403, __('User is not logged in.'), null, []);
+        return new static(403, 'User is not logged in.', null, []);
     }
 
     public function getRequiredRoles(): array

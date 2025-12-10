@@ -17,6 +17,7 @@ use Symfony\Component\Console\Command\DumpCompletionCommand;
 use Symfony\Component\Console\Command\HelpCommand;
 use Symfony\Component\Console\Command\LazyCommand;
 use Symfony\Component\Console\Command\ListCommand;
+use Symfony\Component\Console\Command\SignalableCommandInterface;
 use Symfony\Component\Console\CommandLoader\CommandLoaderInterface;
 use Symfony\Component\Console\Completion\CompletionInput;
 use Symfony\Component\Console\Completion\CompletionSuggestions;
@@ -1004,7 +1005,8 @@ class Application implements ResetInterface
             }
         }
 
-        if (($commandSignals = $command->getSubscribedSignals()) || $this->dispatcher && $this->signalsToDispatchEvent) {
+        $commandSignals = $command instanceof SignalableCommandInterface ? $command->getSubscribedSignals() : [];
+        if ($commandSignals || $this->dispatcher && $this->signalsToDispatchEvent) {
             $signalRegistry = $this->getSignalRegistry();
 
             if (Terminal::hasSttyAvailable()) {
@@ -1275,7 +1277,7 @@ class Application implements ResetInterface
 
             foreach (preg_split('//u', $m[0]) as $char) {
                 // test if $char could be appended to current line
-                if (Helper::width($line.$char) <= $width) {
+                if (mb_strwidth($line.$char, 'utf8') <= $width) {
                     $line .= $char;
                     continue;
                 }

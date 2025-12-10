@@ -10,7 +10,8 @@ use Tests\TestCase;
 
 class [testclass] extends TestCase
 {
-    public function test_renders_successfully()
+    /** @test */
+    public function renders_successfully()
     {
         Livewire::test([class]::class)
             ->assertStatus(200);

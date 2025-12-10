@@ -5,13 +5,12 @@ namespace Laravel\Fortify\Actions;
 use Illuminate\Auth\Events\Failed;
 use Illuminate\Contracts\Auth\StatefulGuard;
 use Illuminate\Validation\ValidationException;
-use Laravel\Fortify\Contracts\RedirectsIfTwoFactorAuthenticatable;
 use Laravel\Fortify\Events\TwoFactorAuthenticationChallenged;
 use Laravel\Fortify\Fortify;
 use Laravel\Fortify\LoginRateLimiter;
 use Laravel\Fortify\TwoFactorAuthenticatable;
 
-class RedirectIfTwoFactorAuthenticatable implements RedirectsIfTwoFactorAuthenticatable
+class RedirectIfTwoFactorAuthenticatable
 {
     /**
      * The guard implementation.

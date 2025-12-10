@@ -22,10 +22,13 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         // Ép toàn bộ link sinh ra phải là HTTPS
-    if($this->app->environment('production') || true) {
-        URL::forceScheme('https');
-    }
+        if ($this->app->environment('production') || true) {
+            URL::forceScheme('https');
+        }
         // Ensure Bootstrap pagination view and Vietnamese labels
+        if (config('app.env') === 'local') {
+            URL::forceScheme('http');
+        }
         Paginator::useBootstrap();
     }
 }

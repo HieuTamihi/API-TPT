@@ -2,18 +2,18 @@
 
 namespace Laravel\Reverb\Servers\Reverb\Publishing;
 
+use Clue\React\Redis\Client;
 use Clue\React\Redis\Factory;
 use React\EventLoop\LoopInterface;
-use React\Promise\PromiseInterface;
 
 class RedisClientFactory
 {
     /**
      * Create a new Redis client.
      */
-    public function make(LoopInterface $loop, string $redisUrl): PromiseInterface
+    public function make(LoopInterface $loop, string $redisUrl): Client
     {
-        return (new Factory($loop))->createClient(
+        return (new Factory($loop))->createLazyClient(
             $redisUrl
         );
     }

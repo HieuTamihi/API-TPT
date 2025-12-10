@@ -16,7 +16,7 @@ class ClientEvent
         Validator::make($event, [
             'event' => ['required', 'string'],
             'channel' => ['required', 'string'],
-            'data' => ['nullable', 'array'],
+            'data' => ['required', 'array'],
         ])->validate();
 
         if (! Str::startsWith($event['event'], 'client-')) {

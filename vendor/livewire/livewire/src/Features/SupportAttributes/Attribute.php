@@ -59,20 +59,14 @@ abstract class Attribute
         return data_get($this->component->all(), $this->levelName);
     }
 
-    function setValue($value, ?bool $nullable = false)
+    function setValue($value)
     {
         if ($this->level !== AttributeLevel::PROPERTY) {
             throw new \Exception('Can\'t set the value of a non-property attribute.');
         }
 
         if ($enum = $this->tryingToSetStringOrIntegerToEnum($value)) {
-            if($nullable) {
-                $value = $enum::tryFrom($value);
-            }
-
-            else {
-                $value = $enum::from($value);
-            }
+            $value = $enum::from($value);
         }
 
         data_set($this->component, $this->levelName, $value);

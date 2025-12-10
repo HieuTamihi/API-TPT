@@ -3142,7 +3142,7 @@ class Builder implements BuilderContract
      * @param  string  $pageName
      * @param  int|null  $page
      * @param  \Closure|int|null  $total
-     * @return \Illuminate\Pagination\LengthAwarePaginator
+     * @return \Illuminate\Contracts\Pagination\LengthAwarePaginator
      */
     public function paginate($perPage = 15, $columns = ['*'], $pageName = 'page', $page = null, $total = null)
     {

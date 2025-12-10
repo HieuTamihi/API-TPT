@@ -2295,7 +2295,7 @@ ${expression ? 'Expression: "' + expression + '"\n\n' : ""}`, el);
     get raw() {
       return raw;
     },
-    version: "3.14.9",
+    version: "3.14.8",
     flushAndStopDeferringMutations,
     dontAutoEvaluateFunctions,
     disableEffectScheduling,
@@ -8162,22 +8162,14 @@ ${expression ? 'Expression: "' + expression + '"\n\n' : ""}`, el);
     if (!state.alpine)
       state.alpine = {};
     state.alpine[key] = unwrap(object);
-    try {
-      window.history.replaceState(state, "", url.toString());
-    } catch (e) {
-      console.error(e);
-    }
+    window.history.replaceState(state, "", url.toString());
   }
   function push(url, key, object) {
     let state = window.history.state || {};
     if (!state.alpine)
       state.alpine = {};
     state = { alpine: { ...state.alpine, ...{ [key]: unwrap(object) } } };
-    try {
-      window.history.pushState(state, "", url.toString());
-    } catch (e) {
-      console.error(e);
-    }
+    window.history.pushState(state, "", url.toString());
   }
   function unwrap(object) {
     if (object === void 0)
@@ -8298,8 +8290,7 @@ ${expression ? 'Expression: "' + expression + '"\n\n' : ""}`, el);
         return swapElements(from2, to);
       }
       let updateChildrenOnly = false;
-      let skipChildren = false;
-      if (shouldSkipChildren(updating, () => skipChildren = true, from2, to, () => updateChildrenOnly = true))
+      if (shouldSkip(updating, from2, to, () => updateChildrenOnly = true))
         return;
       if (from2.nodeType === 1 && window.Alpine) {
         window.Alpine.cloneNode(from2, to);
@@ -8316,9 +8307,7 @@ ${expression ? 'Expression: "' + expression + '"\n\n' : ""}`, el);
         patchAttributes(from2, to);
       }
       updated(from2, to);
-      if (!skipChildren) {
-        patchChildren(from2, to);
-      }
+      patchChildren(from2, to);
     }
     function differentElementNamesTypesOrKeys(from2, to) {
       return from2.nodeType != to.nodeType || from2.nodeName != to.nodeName || getKey(from2) != getKey(to);
@@ -8530,11 +8519,6 @@ ${expression ? 'Expression: "' + expression + '"\n\n' : ""}`, el);
   function shouldSkip(hook, ...args) {
     let skip = false;
     hook(...args, () => skip = true);
-    return skip;
-  }
-  function shouldSkipChildren(hook, skipChildren, ...args) {
-    let skip = false;
-    hook(...args, () => skip = true, skipChildren);
     return skip;
   }
   var patched = false;
@@ -9025,10 +9009,10 @@ ${expression ? 'Expression: "' + expression + '"\n\n' : ""}`, el);
     to.__livewire = component;
     trigger2("morph", { el, toEl: to, component });
     module_default.morph(el, to, {
-      updating: (el2, toEl, childrenOnly, skip, skipChildren) => {
+      updating: (el2, toEl, childrenOnly, skip) => {
         if (isntElement(el2))
           return;
-        trigger2("morph.updating", { el: el2, toEl, component, skip, childrenOnly, skipChildren });
+        trigger2("morph.updating", { el: el2, toEl, component, skip, childrenOnly });
         if (el2.__livewire_replace === true)
           el2.innerHTML = toEl.innerHTML;
         if (el2.__livewire_replace_self === true) {
@@ -9039,8 +9023,6 @@ ${expression ? 'Expression: "' + expression + '"\n\n' : ""}`, el);
           return skip();
         if (el2.__livewire_ignore_self === true)
           childrenOnly();
-        if (el2.__livewire_ignore_children === true)
-          return skipChildren();
         if (isComponentRootEl(el2) && el2.getAttribute("wire:id") !== component.id)
           return skip();
         if (isComponentRootEl(el2))
@@ -9906,8 +9888,6 @@ ${expression ? 'Expression: "' + expression + '"\n\n' : ""}`, el);
   directive2("ignore", ({ el, directive: directive3 }) => {
     if (directive3.modifiers.includes("self")) {
       el.__livewire_ignore_self = true;
-    } else if (directive3.modifiers.includes("children")) {
-      el.__livewire_ignore_children = true;
     } else {
       el.__livewire_ignore = true;
     }
@@ -9922,8 +9902,8 @@ ${expression ? 'Expression: "' + expression + '"\n\n' : ""}`, el);
 
   // js/directives/wire-dirty.js
   var refreshDirtyStatesByComponent = new WeakBag();
-  on2("commit", ({ component, respond }) => {
-    respond(() => {
+  on2("commit", ({ component, succeed }) => {
+    succeed(() => {
       setTimeout(() => {
         refreshDirtyStatesByComponent.each(component, (i) => i(false));
       });
@@ -9931,6 +9911,7 @@ ${expression ? 'Expression: "' + expression + '"\n\n' : ""}`, el);
   });
   directive2("dirty", ({ el, directive: directive3, component }) => {
     let targets = dirtyTargets(el);
+    let dirty = Alpine.reactive({ state: false });
     let oldIsDirty = false;
     let initialDisplay = el.style.display;
     let refreshDirtyState = (isDirty) => {

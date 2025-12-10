@@ -38,11 +38,7 @@ class Server
      */
     public function start(): void
     {
-        try {
-            $this->loop->run();
-        } catch (Throwable $e) {
-            Log::error($e->getMessage());
-        }
+        $this->loop->run();
     }
 
     /**

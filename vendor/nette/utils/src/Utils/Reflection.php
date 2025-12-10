@@ -19,14 +19,14 @@ final class Reflection
 {
 	use Nette\StaticClass;
 
-	/** @deprecated use Nette\Utils\Validators::isBuiltinType() */
+	/** @deprecated use Nette\Utils\Validator::isBuiltinType() */
 	public static function isBuiltinType(string $type): bool
 	{
 		return Validators::isBuiltinType($type);
 	}
 
 
-	/** @deprecated use Nette\Utils\Validators::isClassKeyword() */
+	/** @deprecated use Nette\Utils\Validator::isClassKeyword() */
 	public static function isClassKeyword(string $name): bool
 	{
 		return Validators::isClassKeyword($name);
@@ -240,7 +240,9 @@ final class Reflection
 				case T_CLASS:
 				case T_INTERFACE:
 				case T_TRAIT:
-				case PHP_VERSION_ID < 80100 ? T_CLASS : T_ENUM:
+				case PHP_VERSION_ID < 80100
+					? T_CLASS
+					: T_ENUM:
 					if ($name = self::fetch($tokens, T_STRING)) {
 						$class = $namespace . $name;
 						$classLevel = $level + 1;

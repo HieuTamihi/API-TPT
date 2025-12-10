@@ -6,6 +6,8 @@ use App\Models\Customers;
 use App\Models\warrantyHistory;
 use App\Models\warrantyLookup;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 
 class WarrantyLookupController extends Controller
 {
@@ -20,25 +22,25 @@ class WarrantyLookupController extends Controller
     public function index()
     {
         $title = "Tra cứu bảo hành";
-        
+
         // Sử dụng pagination trực tiếp từ database để tối ưu performance
         $warranty = warrantyLookup::with(['product', 'serialNumber', 'customer', 'warrantyHistories.receiving'])
             ->orderby('id', 'DESC')
             ->paginate(25);
-        
+
         // Group dữ liệu cho trang hiện tại
         $grouped = $warranty->groupBy(function ($item) {
             return $item->sn_id . '_' . $item->export_id; // group theo cặp sn_id + export_id
         })->map(function ($items) {
             $first = $items->first()->replicate();
-        
+
             $first->name_warranty = $items->filter(function ($item) {
                 return !empty($item->name_warranty);
             })->map(function ($item) {
                 $warrantyText = $item->warranty == 0 ? 'không bảo hành' : $item->warranty . ' tháng';
                 return $item->name_warranty . ": " . $warrantyText;
             })->join('| ');
-        
+
             $first->status_string = $items->map(function ($item) {
                 if ($item->status == 0) {
                     $statusText = 'Còn bảo hành';
@@ -49,23 +51,23 @@ class WarrantyLookupController extends Controller
                 } else {
                     $statusText = 'Không xác định';
                 }
-        
+
                 if (!empty($item->name_expire_date)) {
                     return $item->name_expire_date . ": " . $statusText;
                 } elseif (!empty($item->name_warranty)) {
                     return $item->name_warranty . ": " . $statusText;
                 }
-        
+
                 return null;
             })->filter()->join('| ');
-        
+
             $first->name_expire_date = $items->map(function ($item) {
                 if (!empty($item->name_expire_date)) {
                     return $item->name_expire_date . ": " . $item->warranty_extra . " tháng";
                 }
                 return null;
             })->filter()->join('| ');
-        
+
             return $first;
         });
 
@@ -82,6 +84,7 @@ class WarrantyLookupController extends Controller
                 'pageName' => 'page',
             ]
         );
+
 
         $customers = Customers::all();
         return view('expertise.warrantyLookup.index', compact('title', 'warranty', 'customers'));
@@ -209,5 +212,96 @@ class WarrantyLookupController extends Controller
             ]);
         }
         return false;
+    }
+
+    /**
+     * API Check bảo hành (Đã tích hợp)
+     */
+    public function checkWarranty(Request $request)
+    {
+        // 1. Validate: Yêu cầu bắt buộc có 'keyword'
+        $request->validate([
+            'keyword' => 'required|string'
+        ]);
+
+        $keyword = trim($request->keyword);
+
+        // 2. Query tìm kiếm: Tìm trong bảng Serial HOẶC bảng Product
+        $warranties = WarrantyLookup::query()
+            ->with([
+                'product:id,product_name,product_code', // Nhớ dùng đúng tên cột
+                'serialNumber:id,serial_code',          // Nhớ dùng đúng tên cột
+                'customer:id,customer_name'
+            ])
+            ->where(function($query) use ($keyword) {
+                // Điều kiện 1: Trùng Serial Code
+                $query->whereHas('serialNumber', function($q) use ($keyword) {
+                    $q->where('serial_code', $keyword);
+                })
+                // Điều kiện 2: HOẶC Trùng Product Code
+                ->orWhereHas('product', function($q) use ($keyword) {
+                    $q->where('product_code', $keyword);
+                });
+            })
+            ->orderBy('created_at', 'desc') // Sắp xếp mới nhất lên đầu
+            ->get();
+
+        // 3. Nếu không tìm thấy dữ liệu nào
+        if ($warranties->isEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Không tìm thấy thông tin bảo hành cho từ khóa: ' . $keyword
+            ], 404);
+        }
+
+        // 4. Nhóm kết quả theo Serial Number (sn_id)
+        // Lý do: Nếu tìm theo Mã SP, sẽ có nhiều thiết bị khác nhau.
+        // Mỗi thiết bị cần gom lịch sử lại thành một cụm.
+        $groupedData = $warranties->groupBy('sn_id');
+
+        // 5. Format dữ liệu trả về
+        $result = $groupedData->map(function ($items) {
+            // Lấy thông tin chung từ bản ghi mới nhất của serial này
+            $info = $items->first();
+            
+            return [
+                'device_info' => [
+                    'serial_code'  => $info->serialNumber->serial_code ?? 'N/A',
+                    'product_name' => $info->product->product_name ?? 'N/A',
+                    'product_code' => $info->product->product_code ?? 'N/A',
+                    'customer'     => $info->customer->customer_name ?? 'Khách lẻ',
+                ],
+                'history' => $items->map(function($item) {
+                    return [
+                        'id'            => $item->id,
+                        'warranty_name' => $item->name_warranty,
+                        'status_text'   => $this->mapStatus($item->status),
+                        'start_date'    => $item->export_return_date,
+                        'end_date'      => $item->warranty_expire_date,
+                        'is_active'     => $item->warranty_expire_date > now(), // Kiểm tra còn hạn
+                    ];
+                })->values() // Reset key array
+            ];
+        })->values(); // Reset key array của group
+
+        return response()->json([
+            'success' => true,
+            'search_keyword' => $keyword,
+            'total_devices_found' => $result->count(),
+            'data' => $result
+        ]);
+    }
+
+    // Hàm phụ để chuyển đổi trạng thái số sang chữ
+    private function mapStatus($status)
+    {
+        return match ((int)$status) {
+            1 => 'Nhập hàng (Trong kho)',
+            2 => 'Xuất hàng',
+            3 => 'Tiếp nhận',
+            4 => 'Trả hàng',
+            5 => 'Đang mượn',
+            default => 'Không xác định',
+        };
     }
 }

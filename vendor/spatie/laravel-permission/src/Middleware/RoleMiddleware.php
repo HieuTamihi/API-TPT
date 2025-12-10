@@ -28,7 +28,9 @@ class RoleMiddleware
             throw UnauthorizedException::missingTraitHasRoles($user);
         }
 
-        $roles = explode('|', self::parseRolesToString($role));
+        $roles = is_array($role)
+            ? $role
+            : explode('|', $role);
 
         if (! $user->hasAnyRole($roles)) {
             throw UnauthorizedException::forRoles($roles);
@@ -40,37 +42,15 @@ class RoleMiddleware
     /**
      * Specify the role and guard for the middleware.
      *
-     * @param  array|string|\BackedEnum  $role
+     * @param  array|string  $role
      * @param  string|null  $guard
      * @return string
      */
     public static function using($role, $guard = null)
     {
-        $roleString = self::parseRolesToString($role);
-
+        $roleString = is_string($role) ? $role : implode('|', $role);
         $args = is_null($guard) ? $roleString : "$roleString,$guard";
 
         return static::class.':'.$args;
-    }
-
-    /**
-     * Convert array or string of roles to string representation.
-     *
-     * @return string
-     */
-    protected static function parseRolesToString(array|string|\BackedEnum $role)
-    {
-        // Convert Enum to its value if an Enum is passed
-        if ($role instanceof \BackedEnum) {
-            $role = $role->value;
-        }
-
-        if (is_array($role)) {
-            $role = array_map(fn ($r) => $r instanceof \BackedEnum ? $r->value : $r, $role);
-
-            return implode('|', $role);
-        }
-
-        return (string) $role;
     }
 }

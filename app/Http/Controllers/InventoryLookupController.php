@@ -95,23 +95,23 @@ class InventoryLookupController extends Controller
             $model->warehouse_id = $item->warehouse_id;
             $model->import_id = $item->import_id;
             $model->remaining_quantity = $item->remaining_quantity;
-            
+
             // Load relationships
             $model->setRelation('product', Product::find($item->product_id));
             $model->setRelation('provider', Providers::find($item->provider_id));
-            
+
             return $model;
         });
 
         // Gộp lại và sắp xếp theo ID mới nhất
         $allInventory = $withSerial->concat($noSerialModels)->sortByDesc('id')->values();
-        
+
         // Tạo pagination tùy chỉnh cho 25 items per page
         $perPage = 25;
         $currentPage = request()->get('page', 1);
         $offset = ($currentPage - 1) * $perPage;
         $items = $allInventory->slice($offset, $perPage)->values();
-        
+
         // Tạo paginator tùy chỉnh
         $inventory = new \Illuminate\Pagination\LengthAwarePaginator(
             $items,
@@ -123,7 +123,7 @@ class InventoryLookupController extends Controller
                 'pageName' => 'page',
             ]
         );
-        
+
         $providers = Providers::all();
         return view('expertise.inventoryLookup.index', compact('title', 'inventory', 'providers'));
     }
@@ -347,4 +347,85 @@ class InventoryLookupController extends Controller
     //     $columns = \DB::getSchemaBuilder()->getColumnListing('products');
     //     dd($columns); // Xem danh sách cột của bảng products
     // }
+
+    /**
+     * API Check tồn kho nhanh
+     */
+    public function checkStock(Request $request)
+    {
+        // 1. Validate
+        $request->validate([
+            'keyword' => 'required|string|min:2' // Yêu cầu nhập ít nhất 2 ký tự
+        ]);
+
+        $keyword = trim($request->keyword);
+
+        // 2. Query tìm kiếm
+        // Tìm trong bảng tồn kho, khớp với Sản phẩm hoặc Serial
+        $inventoryItems = InventoryLookup::query()
+            ->with([
+                'product:id,product_name,product_code,brand,warranty', // Lấy thông tin SP
+                'warehouse:id,warehouse_name',          // Lấy tên kho
+                'serialNumber:id,serial_code' // Lấy mã serial (nếu tìm theo serial)
+            ])
+            ->where(function ($query) use ($keyword) {
+                // a. Tìm theo Product Code hoặc Product Name
+                $query->whereHas('product', function ($q) use ($keyword) {
+                    $q->where('product_code', 'like', "%{$keyword}%")
+                        ->orWhere('product_name', 'like', "%{$keyword}%");
+                })
+                    // b. Tìm theo Serial Code
+                    ->orWhereHas('serialNumber', function ($q) use ($keyword) {
+                        $q->where('serial_code', $keyword); // Serial thường tìm chính xác
+                    });
+            })
+            ->get();
+
+        // 3. Nếu không có kết quả
+        if ($inventoryItems->isEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => "Không tìm thấy sản phẩm nào còn hàng với từ khóa: '$keyword'",
+                'total_stock' => 0,
+                'data' => []
+            ]);
+        }
+
+        // 4. Xử lý dữ liệu trả về (Grouping)
+        // Gom nhóm theo Sản phẩm (vì 1 từ khóa có thể ra nhiều sản phẩm khác nhau)
+        $groupedByProduct = $inventoryItems->groupBy('product_id');
+
+        $result = $groupedByProduct->map(function ($items) {
+            $productInfo = $items->first()->product;
+
+            // Tính tổng tồn kho của sản phẩm này
+            $totalQty = $items->sum('remaining_quantity');
+
+            // Chi tiết tồn kho theo từng kho (Group by Warehouse)
+            $warehouseDetails = $items->groupBy('warehouse_id')->map(function ($whItems) {
+                $whInfo = $whItems->first()->warehouse;
+                return [
+                    'warehouse_name' => $whInfo->warehouse_name ?? 'Kho chưa đặt tên',
+                    'quantity'       => $whItems->sum('remaining_quantity'),
+                    // Nếu cần hiển thị list Serial có trong kho này thì bỏ comment dòng dưới:
+                    // 'serials'     => $whItems->pluck('serialNumber.serial_code')->filter()->values()
+                ];
+            })->values();
+
+            return [
+                'product_name' => $productInfo->product_name ?? 'N/A',
+                'product_code' => $productInfo->product_code ?? 'N/A',
+                'brand'        => $productInfo->brand ?? 'N/A',
+                'total_stock'  => $totalQty,
+                'locations'    => $warehouseDetails
+            ];
+        })->values();
+
+        return response()->json([
+            'success' => true,
+            'search_keyword' => $keyword,
+            'total_products_found' => $result->count(),
+            'data' => $result
+        ]);
+    }
 }

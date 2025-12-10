@@ -3,7 +3,6 @@
 namespace Laravel\Reverb\Servers\Reverb\Http;
 
 use Closure;
-use GuzzleHttp\Psr7\HttpFactory;
 use GuzzleHttp\Psr7\Message;
 use Illuminate\Support\Arr;
 use Laravel\Reverb\Servers\Reverb\Concerns\ClosesConnections;
@@ -32,7 +31,7 @@ class Router
      */
     public function __construct(protected UrlMatcherInterface $matcher)
     {
-        $this->negotiator = new ServerNegotiator(new RequestVerifier, new HttpFactory);
+        $this->negotiator = new ServerNegotiator(new RequestVerifier);
     }
 
     /**
@@ -49,13 +48,9 @@ class Router
         try {
             $route = $this->matcher->match($uri->getPath());
         } catch (MethodNotAllowedException $e) {
-            $this->close($connection, 405, 'Method not allowed.', ['Allow' => $e->getAllowedMethods()]);
-
-            return null;
+            return $this->close($connection, 405, 'Method not allowed.', ['Allow' => $e->getAllowedMethods()]);
         } catch (ResourceNotFoundException $e) {
-            $this->close($connection, 404, 'Not found.');
-
-            return null;
+            return $this->close($connection, 404, 'Not found.');
         }
 
         $controller = $this->controller($route);
@@ -103,8 +98,7 @@ class Router
      */
     protected function attemptUpgrade(RequestInterface $request, Connection $connection): ReverbConnection
     {
-        $response = $this->negotiator->handshake($request)
-            ->withHeader('X-Powered-By', 'Laravel Reverb');
+        $response = $this->negotiator->handshake($request);
 
         $connection->write(Message::toString($response));
 

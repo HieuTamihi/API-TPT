@@ -1018,7 +1018,7 @@ class Builder implements BuilderContract
      * @param  string  $pageName
      * @param  int|null  $page
      * @param  \Closure|int|null  $total
-     * @return \Illuminate\Pagination\LengthAwarePaginator
+     * @return \Illuminate\Contracts\Pagination\LengthAwarePaginator
      *
      * @throws \InvalidArgumentException
      */
