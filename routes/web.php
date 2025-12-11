@@ -27,6 +27,14 @@ use App\Http\Middleware\CorsMiddleware;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 
+Route::prefix('receivings')->group(function () {
+    Route::get('/list', [ReceivingController::class, 'list']);
+    Route::get('detail/{id}', [ReceivingController::class, 'detail']);
+    Route::post('/add', [ReceivingController::class, 'add']);
+    Route::get('/detail/{id}', [ReceivingController::class, 'detail']);
+    Route::put('/change/{id}', [ReceivingController::class, 'change']);
+    Route::delete('/delete/{id}', [ReceivingController::class, 'delete']);
+});
 
 // Group route cho Imports
 Route::prefix('imports')->group(function () {

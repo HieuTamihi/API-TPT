@@ -14,7 +14,9 @@ class VerifyCsrfToken extends Middleware
     protected $except = [
         // Bỏ qua kiểm tra CSRF cho tất cả các đường dẫn bắt đầu bằng "imports/"
         'imports/*',
-        
+        'exports/*',
+        'receivings/*',
+
         // Nếu bạn có các route khác cần test Postman trong web.php, thêm vào dưới đây:
         // 'products/*',
         // 'customers/*',

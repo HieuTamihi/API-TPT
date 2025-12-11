@@ -12,9 +12,18 @@ use App\Models\User;
 use App\Models\warrantyLookup;
 use App\Models\WarrantyReceived;
 use App\Notifications\ReceiNotification;
+use Carbon\Carbon;
+use Exception;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon as SupportCarbon;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
+
+use function Laravel\Prompts\form;
+use function Laravel\Prompts\select;
 
 class ReceivingController extends Controller
 {
@@ -255,18 +264,18 @@ class ReceivingController extends Controller
                 if ($receivedProduct->serial_id) {
                     // Kiểm tra xem serial có tồn tại trong phiếu xuất hàng không
                     $hasExport = \App\Models\ProductExport::where('sn_id', $receivedProduct->serial_id)->exists();
-                    
+
                     // Kiểm tra xem serial có tồn tại trong phiếu tiếp nhận khác không
                     $hasOtherReceiving = ReceivedProduct::where('serial_id', $receivedProduct->serial_id)
                         ->where('id', '!=', $receivedProduct->id)
                         ->exists();
-                    
+
                     // Chỉ xóa serial nếu không có trong phiếu xuất hàng và không có trong phiếu tiếp nhận khác
                     if (!$hasExport && !$hasOtherReceiving) {
                         SerialNumber::find($receivedProduct->serial_id)?->delete();
                     }
                 }
-                
+
                 $receivedProduct->warrantyReceived()->delete();
                 $receivedProduct->delete();
             }
@@ -505,6 +514,369 @@ class ReceivingController extends Controller
             if ($warranty) {
                 return $warranty;
             }
+        }
+    }
+
+    /**
+     * API lấy danh sách phiếu tiếp nhận
+     */
+    public function list(Request $request)
+    {
+        try {
+            $data = $request->all();
+            $perPage = $request->input('limit', 20);
+
+            // 1. Chuẩn bị Subqueries (để lấy serial và tên sản phẩm gộp)
+            $serialAggregate = DB::table('received_products')
+                ->leftJoin('serial_numbers', 'serial_numbers.id', '=', 'received_products.serial_id')
+                ->select(
+                    'received_products.reception_id',
+                    DB::raw('GROUP_CONCAT(DISTINCT serial_numbers.serial_code ORDER BY serial_numbers.serial_code SEPARATOR ", ") AS serial_number')
+                )
+                ->groupBy('received_products.reception_id');
+
+            $productAggregate = DB::table('received_products')
+                ->leftJoin('products', 'products.id', '=', 'received_products.product_id')
+                ->select(
+                    'received_products.reception_id',
+                    DB::raw('GROUP_CONCAT(DISTINCT products.product_name ORDER BY products.product_name SEPARATOR ", ") AS product_name'),
+                    DB::raw('GROUP_CONCAT(DISTINCT products.product_code ORDER BY products.product_code SEPARATOR ", ") AS product_code')
+                )
+                ->groupBy('received_products.reception_id');
+
+            // 2. Bắt đầu Query chính
+            $query = Receiving::query()
+                ->join('users', 'receiving.user_id', '=', 'users.id')
+                ->join('customers', 'receiving.customer_id', '=', 'customers.id')
+                ->leftJoinSub($serialAggregate, 'agg_serials', function ($join) {
+                    $join->on('agg_serials.reception_id', '=', 'receiving.id');
+                })
+                ->leftJoinSub($productAggregate, 'agg_products', function ($join) {
+                    $join->on('agg_products.reception_id', '=', 'receiving.id');
+                })
+                ->select(
+                    'receiving.*',
+                    'users.name as username',
+                    'customers.customer_name as customername',
+                    DB::raw('agg_serials.serial_number as serial_number'),
+                    DB::raw('agg_products.product_name as product_name'),
+                    DB::raw('agg_products.product_code as product_code')
+                );
+
+            // 3. Xử lý điều kiện tìm kiếm (Search)
+            if (!empty($data['search'])) {
+                $query->where(function ($q) use ($data) {
+                    $q->where('receiving.form_code_receiving', 'like', '%' . $data['search'] . '%')
+                        ->orWhere('receiving.notes', 'like', '%' . $data['search'] . '%')
+                        ->orWhere('customers.customer_name', 'like', '%' . $data['search'] . '%') // Tìm theo tên khách lun cho tiện
+                        ->orWhereExists(function ($sub) use ($data) {
+                            $sub->from('received_products')
+                                ->leftJoin('serial_numbers', 'serial_numbers.id', '=', 'received_products.serial_id')
+                                ->whereColumn('received_products.reception_id', 'receiving.id')
+                                ->where('serial_numbers.serial_code', 'like', '%' . $data['search'] . '%');
+                        })
+                        ->orWhereExists(function ($sub) use ($data) {
+                            $sub->from('received_products')
+                                ->leftJoin('products', 'products.id', '=', 'received_products.product_id')
+                                ->whereColumn('received_products.reception_id', 'receiving.id')
+                                ->where(function ($sq) use ($data) {
+                                    $sq->where('products.product_name', 'like', '%' . $data['search'] . '%')
+                                        ->orWhere('products.product_code', 'like', '%' . $data['search'] . '%');
+                                });
+                        });
+                });
+            }
+
+            // 4. Các bộ lọc khác (Filters)
+            if (!empty($data['ma'])) {
+                $query->where('receiving.form_code_receiving', 'like', '%' . $data['ma'] . '%');
+            }
+
+            if (!empty($data['customer'])) {
+                $customerIds = is_array($data['customer']) ? $data['customer'] : [$data['customer']];
+                $query->whereIn('receiving.customer_id', $customerIds);
+            }
+
+            if (!empty($data['date'][0]) && !empty($data['date'][1])) {
+                $dateStart = Carbon::parse($data['date'][0])->startOfDay();
+                $dateEnd = Carbon::parse($data['date'][1])->endOfDay();
+                $query->whereBetween('receiving.date_created', [$dateStart, $dateEnd]);
+            }
+
+            if (!empty($data['closed_at'][0]) && !empty($data['closed_at'][1])) {
+                $dateStart = Carbon::parse($data['closed_at'][0])->startOfDay();
+                $dateEnd = Carbon::parse($data['closed_at'][1])->endOfDay();
+                $query->whereBetween('receiving.closed_at', [$dateStart, $dateEnd]);
+            }
+
+            if (isset($data['form_type'])) {
+                $types = is_array($data['form_type']) ? $data['form_type'] : [$data['form_type']];
+                $query->whereIn('receiving.form_type', $types);
+            }
+
+            if (isset($data['status'])) {
+                $statuses = is_array($data['status']) ? $data['status'] : [$data['status']];
+                $query->whereIn('receiving.status', $statuses);
+            }
+
+            // 5. Sắp xếp (Sorting)
+            if (isset($data['sort']) && isset($data['sort'][0])) {
+                // Cần thêm prefix table nếu sort theo các cột chung chung
+                $sortColumn = $data['sort'][0];
+                $sortDirection = $data['sort'][1] ?? 'asc';
+
+                // Fix lỗi ambiguous column nếu sort theo id, status...
+                if (in_array($sortColumn, ['id', 'status', 'created_at', 'updated_at'])) {
+                    $sortColumn = 'receiving.' . $sortColumn;
+                }
+
+                $query->orderBy($sortColumn, $sortDirection);
+            } else {
+                $query->orderBy('receiving.id', 'desc');
+            }
+
+            // 6. Thực hiện phân trang
+            $receivings = $query->paginate($perPage);
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Lấy danh sách phiếu tiếp nhận thành công',
+                'data' => $receivings
+            ], 200);
+        } catch (Exception $ex) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Lỗi hệ thống: ' . $ex->getMessage() . ' at line ' . $ex->getLine()
+            ], 500);
+        }
+    }
+
+    // API lấy chi tiết phiếu tiếp nhận
+    public function detail($id)
+    {
+        try {
+            //code...
+            $receiving = Receiving::with([
+                'customer',
+                'user',
+                'receivedProducts.product',
+                'receivedProducts.serial',
+                'quotation',
+                'returnForms'
+            ])->findOrFail($id);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Lấy chi tiết phiếu tiếp nhận thành công.',
+                'data' => $receiving
+            ], 200);
+        } catch (ModelNotFoundException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Không tìm thấy phiếu tiếp nhận với ID: ' . $id
+            ], 404);
+        } catch (Exception $ex) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Đã xảy ra lỗi: ' . $ex->getMessage()
+            ], 500);
+        }
+    }
+
+    //Tạo phiếu tiếp nhận
+    public function add(Request $request)
+    {
+        // ---------------------------------------------------------
+        // BƯỚC 1: VALIDATOR (CÁNH CỔNG BẢO VỆ)
+        // ---------------------------------------------------------
+        $validator = Validator::make($request->all(), [
+            // Các trường BẮT BUỘC phải có
+            'customer_id'    => 'required|exists:customers,id',
+            'branch_id'      => 'required',
+            'products'       => 'required|array|min:1',
+            'products.*.product_id' => 'required|exists:products,id',
+            'products.*.quantity'   => 'required|numeric|min:1',
+
+            // Các trường LINH ĐỘNG (Sửa luật để không bị chặn)
+            // form_type: DB cần số, nhưng nếu lỡ gửi chữ thì để 'required' thôi, đừng ép 'integer' ngay đây
+            'form_type'      => 'required',
+
+            // status: DB cần số, nhưng Postman đang gửi chữ "pending"
+            // => Bỏ rule 'integer', chỉ để nullable hoặc string để cho qua cửa
+            'status'         => 'nullable',
+
+            // form_code_receiving, user_id: XÓA HẲN khỏi đây vì hệ thống tự làm
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'errors' => $validator->errors()], 422);
+        }
+
+        // ---------------------------------------------------------
+        // BƯỚC 2: LOGIC XỬ LÝ (CHUYỂN ĐỔI DỮ LIỆU)
+        // ---------------------------------------------------------
+        DB::beginTransaction();
+        try {
+            // 1. Xử lý Form Type (Nếu gửi chữ "Bảo hành" -> đổi thành số 1)
+            // Nếu bạn gửi số 1 ngay từ đầu thì tốt, code này vẫn chạy đúng.
+            $formTypeValue = $request->form_type;
+            if (!is_numeric($formTypeValue)) {
+                // Ví dụ map đơn giản, bạn nên quy định Client gửi số thì tốt hơn
+                $formTypeValue = 1; // Mặc định về 1 nếu gửi chữ linh tinh
+            }
+
+            // 2. Xử lý Status (Nếu gửi chữ "pending" -> đổi thành số 1)
+            $statusValue = 1; // Mặc định 1 (Tiếp nhận)
+            if ($request->status == 'pending') $statusValue = 1;
+            if ($request->status == 'processing') $statusValue = 2;
+            if (is_numeric($request->status)) $statusValue = $request->status; // Nếu gửi số thì lấy số
+
+            // 3. Sinh mã phiếu
+            $tempModel = new Receiving();
+            $prefix = $request->input('prefix', 'PN');
+            $formCode = $tempModel->getQuoteCount($prefix, Receiving::class, 'form_code_receiving');
+
+            // ---------------------------------------------------------
+            // BƯỚC 3: LƯU VÀO DATABASE
+            // ---------------------------------------------------------
+            $receiving = new Receiving();
+            $receiving->branch_id           = $request->branch_id;
+            $receiving->form_type           = $formTypeValue; // Đã xử lý thành số
+            $receiving->form_code_receiving = $formCode;      // Đã tự sinh
+            $receiving->customer_id         = $request->customer_id;
+            $receiving->address             = $request->address;
+            $receiving->contact_person      = $request->contact_person;
+            $receiving->phone               = $request->phone;
+            $receiving->notes               = $request->notes;
+            $receiving->user_id             = Auth::id() ?? 1; // Tự lấy ID
+            $receiving->date_created        = $request->date_created ? Carbon::parse($request->date_created) : Carbon::now();
+            $receiving->status              = $statusValue;    // Đã xử lý thành số
+            $receiving->state               = $request->state ?? 0;
+
+            $receiving->save();
+
+            // Lưu sản phẩm...
+            foreach ($request->products as $item) {
+                ReceivedProduct::create([
+                    'reception_id' => $receiving->id,
+                    'product_id'   => $item['product_id'],
+                    'quantity'     => $item['quantity'],
+                    'serial_id'    => $item['serial_id'] ?? null,
+                    'status'       => $item['status'] ?? null,
+                    'note'         => $item['note'] ?? null,
+                ]);
+            }
+
+            DB::commit();
+            return response()->json(['success' => true, 'data' => $receiving], 201);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+    /**
+     * CẬP NHẬT (change)
+     */
+    public function change(Request $request, $id)
+    {
+        $validator = Validator::make($request->all(), [
+            'customer_id'   => 'required|exists:customers,id',
+            'products'      => 'nullable|array',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'errors' => $validator->errors()], 422);
+        }
+
+        DB::beginTransaction();
+        try {
+            $receiving = Receiving::findOrFail($id);
+
+            // 1. Cập nhật thông tin phiếu chính
+            $receiving->update($request->only([
+                'branch_id',
+                'form_type',
+                'customer_id',
+                'address',
+                'contact_person',
+                'notes',
+                'phone',
+                'status',
+                'state',
+                'closed_at'
+            ]));
+
+            if ($request->has('date_created')) {
+                $receiving->date_created = Carbon::parse($request->date_created);
+                $receiving->save();
+            }
+
+            // 2. Cập nhật sản phẩm (Sửa lỗi chính tả prodicts -> products)
+            if ($request->has('products') && is_array($request->products)) {
+                // Xóa cũ
+                ReceivedProduct::where('reception_id', $id)->delete();
+
+                // Tạo mới
+                foreach ($request->products as $item) {
+                    ReceivedProduct::create([
+                        'reception_id'  => $receiving->id,
+                        'product_id'    => $item['product_id'],
+                        'quantity'      => $item['quantity'],
+                        'serial_id'     => $item['serial_id'] ?? null,
+                        'status'        => $item['status'] ?? null,
+                        'note'          => $item['note'] ?? null,
+                    ]);
+                }
+            }
+
+            // 3. Commit và Return phải nằm NGOÀI vòng if sản phẩm
+            DB::commit();
+
+            return response()->json([
+                'success'   => true,
+                'message'   => 'Cập nhật phiếu thành công.',
+                'data'      => $receiving->fresh()->load('receivedProducts.product'),
+            ], 200);
+        } catch (\Exception $ex) { // Sửa Exception cho đúng namespace
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Lỗi khi cập nhật: ' . $ex->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * XÓA (DESTROY)
+     */
+    public function delete($id)
+    {
+        DB::beginTransaction();
+        try {
+            $receiving = Receiving::findOrFail($id);
+
+            // 1. Xóa các sản phẩm con trước (Dù có set cascade ở DB hay không, xóa ở code vẫn an toàn hơn)
+            $receiving->receivedProducts()->delete();
+
+            // 2. Có thể cần xóa thêm các quan hệ khác như Quotation, ReturnForm nếu cần thiết
+            // $receiving->quotation()->delete();
+            // $receiving->returnForms()->delete();
+
+            // 3. Xóa phiếu chính
+            $receiving->delete();
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Xóa phiếu tiếp nhận thành công.'
+            ], 200);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Lỗi khi xóa: ' . $e->getMessage()
+            ], 500);
         }
     }
 }

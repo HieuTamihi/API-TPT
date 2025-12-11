@@ -8,6 +8,7 @@ use App\Models\quotation_form;
 use App\Models\QuotationService;
 use App\Models\Receiving;
 use App\Models\User;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
@@ -234,5 +235,69 @@ class QuotationController extends Controller
         }
 
         return response()->json(['msg' => 'Lưu điều khoản thành công!']);
+    }
+
+    // API danh sách tất cả có phân trang và lọc, phiếu báo giá
+    public function list(Request $request)
+    {
+        // Khởi tạo query và Eager Loading các quan hệ
+        $query = Quotation::with(['customer', 'reception', 'createdBy']);
+
+        // --- Bắt đầu Logic Lọc (tương tự getQuotationAjax) ---
+
+        // 1. Tìm kiếm chung (Mã hoặc Ghi chú)
+        if ($request->has('search') && $request->search != '') {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('quotation_code', 'like', '%' . $search . '%')
+                    ->orWhere('notes', 'like', '%' . $search . '%');
+            });
+        }
+
+        // 2. Lọc theo Khách hàng
+        if ($request->has('customer_id')) {
+            // Hỗ trợ truyền 1 id hoặc mảng id
+            $customerIds = is_array($request->customer_id) ? $request->customer_id : [$request->customer_id];
+            $query->whereIn('customer_id', $customerIds);
+        }
+
+        // 3. Lọc theo Mã phiếu tiếp nhận (Receiving Code)
+        if ($request->has('receiving_code')) {
+            $receivingCode = $request->receiving_code;
+            $query->whereHas('reception', function ($q) use ($receivingCode) {
+                $q->where('form_code_receiving', 'like', '%' . $receivingCode . '%');
+            });
+        }
+
+        // 4. Lọc theo Ngày (Range)
+        if ($request->has('date_start') && $request->has('date_end')) {
+            $startDate = Carbon::parse($request->date_start)->startOfDay();
+            $endDate = Carbon::parse($request->date_end)->endOfDay();
+            $query->whereBetween('quotation_date', [$startDate, $endDate]);
+        }
+
+        // 5. Lọc theo Tổng tiền (Range)
+        if ($request->has('min_amount') && $request->has('max_amount')) {
+            $query->whereBetween('total_amount', [$request->min_amount, $request->max_amount]);
+        }
+
+        // 6. Sắp xếp
+        if ($request->has('sort_by') && $request->has('sort_dir')) {
+            $query->orderBy($request->sort_by, $request->sort_dir); // vd: id, desc
+        } else {
+            $query->orderBy('id', 'desc'); // Mặc định mới nhất lên đầu
+        }
+
+        // --- Kết thúc Logic Lọc ---
+
+        // Phân trang (Mặc định 10 phần tử/trang)
+        $perPage = $request->get('per_page', 10);
+        $quotations = $query->paginate($perPage);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Lấy danh sách thành công',
+            'data' => $quotations
+        ], 200);
     }
 }
