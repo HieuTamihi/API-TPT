@@ -14,9 +14,11 @@ use App\Models\warrantyHistory;
 use App\Models\warrantyLookup;
 use App\Models\WarrantyReceived;
 use Carbon\Carbon;
+use Exception;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Validator;
 use phpDocumentor\Reflection\DocBlock\Serializer;
 
 class ReturnFormController extends Controller
@@ -710,5 +712,256 @@ class ReturnFormController extends Controller
             ]);
         }
         return false;
+    }
+
+    /**
+     * DANH SÁCH (LIST)
+     * GET: /return-forms/list
+     */
+    public function list(Request $request)
+    {
+        $data = $request->all();
+        $returnforms = $this->returnforms->getReturnFormAjax($data);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Lấy danh sách phiếu trả hàng thành công',
+            'data'    => $returnforms,
+        ], 200);
+    }
+
+    /**
+     * CHI TIẾT (DETAIL)
+     * GET: /return-form/detail/{id}
+     */
+    public function detail(Request $request, $id)
+    {
+        $returnForm = ReturnForm::with(['customer', 'reception', 'productReturns'])->findOrFail($id);
+
+        if (!$returnForm) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Không tìm thấy phiếu trả hàng',
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Lấy phiếu trả hàng thành công',
+            'data'    => $returnForm,
+        ], 200);
+    }
+
+    /**
+     * THÊM MỚI (CREATE) - Kèm sản phẩm chi tiết
+     * POST: /return-form/add
+     */
+    public function add(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'reception_id'   => 'required|exists:receiving,id',
+            'return_code'    => 'required|unique:return_form,return_code|max:255',
+            'customer_id'    => 'required|exists:customers,id',
+            'date_created'   => 'required|date',
+            'return_method'  => 'required|string|max:255',
+            'user_id'        => 'required|exists:users,id',
+            'status'         => 'required|in:1,2', // 1: Hoàn thành, 2: Không đồng ý
+
+            // Các trường phụ
+            'address'        => 'nullable|string|max:255',
+            'contact_person' => 'nullable|string|max:255',
+            'phone_number'   => 'nullable|string|max:20',
+            'notes'          => 'nullable|string',
+
+            // Validate mảng sản phẩm con (nếu có)
+            'products'       => 'nullable|array',
+            'products.*.product_id' => 'required_with:products|exists:products,id',
+            'products.*.quantity'   => 'required_with:products|integer|min:1',
+        ], [
+            'return_code.unique' => 'Mã phiếu trả hàng đã tồn tại',
+            'reception_id.required' => 'Vui lòng chọn phiếu tiếp nhận',
+            'status.in' => 'Trạng thái không hợp lệ (chỉ nhận 1 hoặc 2)',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['status' => false, 'error' => $validator->errors()], 422);
+        }
+
+        // Sử dụng Transaction để đảm bảo toàn vẹn dữ liệu
+        DB::beginTransaction();
+        try {
+            //code...
+            $returnForm = ReturnForm::create($request->except('products'));
+
+            if ($request->has('products') && !empty($request->products)) {
+                foreach ($request->products as $productData) {
+                    // Gán return_form_id và data
+                    $productData['return_form_id'] = $returnForm->id;
+
+                    //Tạo bản ghi trong product_returns
+                    DB::table('product_returns')->insert([
+                        'return_form_id' => $returnForm->id,
+                        'product_id' => $productData['product_id'],
+                        'quantity' => $productData['quantity'],
+                        'serial_number_id' => $productData['serial_number_id'] ?? null,
+                        'replacement_code' => $productData['replacement_code'] ?? null,
+                        'replacement_serial_number_id' => $productData['replacement_serial_number_id'] ?? null,
+                        'extra_warranty' => $productData['extra_warranty'] ?? null,
+                        'notes' => $productData['notes'] ?? null,
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                }
+            }
+
+            DB::commit();
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Tạo phiếu trả hàng thành công',
+                'data'   => $returnForm->load('productReturns'),
+            ], 201);
+        } catch (Exception $ex) {
+            return response()->json([
+                'status'    => true,
+                'message'   => 'Lỗi hệ thống: ' . $ex->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * CẬP NHẬT (UPDATE)
+     * PUT/PATCH: /return-form/change/{id}
+     */
+    public function change(Request $request, $id)
+    {
+        $returnForm = ReturnForm::find($id);
+
+        if (!$returnForm) {
+            return response()->json(['status' => false, 'message' => 'Không tìm thấy phiếu'], 404);
+        }
+
+        // 1. Validate
+        $validator = Validator::make($request->all(), [
+            // Validate Parent
+            'reception_id'   => 'required|exists:receiving,id|unique:return_form,reception_id,' . $id,
+            'return_code'    => 'required|max:255|unique:return_form,return_code,' . $id,
+            'customer_id'    => 'required|exists:customers,id',
+            'date_created'   => 'required|date',
+            'return_method'  => 'required|string|max:255',
+            'user_id'        => 'required|exists:users,id',
+            'status'         => 'required|in:1,2',
+
+            // Validate Text fields
+            'address'        => 'nullable|string|max:255',
+            'contact_person' => 'nullable|string|max:255',
+            'phone_number'   => 'nullable|string|max:20',
+            'notes'          => 'nullable|string',
+
+            // Validate Children (Products) - QUAN TRỌNG
+            'products'       => 'nullable|array',
+            'products.*.product_id' => 'required_with:products|exists:products,id',
+            'products.*.quantity'   => 'required_with:products|integer|min:1',
+        ], [
+            'return_code.unique' => 'Mã phiếu trả hàng đã tồn tại',
+            'reception_id.unique' => 'Phiếu tiếp nhận này đã được sử dụng trong một phiếu trả hàng khác',
+            'reception_id.required' => 'Vui lòng chọn phiếu tiếp nhận',
+            'status.in' => 'Trạng thái không hợp lệ (chỉ nhận 1 hoặc 2)',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['status' => false, 'errors' => $validator->errors()], 422);
+        }
+
+        // 2. Xử lý dữ liệu với Transaction
+        DB::beginTransaction();
+        try {
+            // Cập nhật thông tin phiếu cha
+            $returnForm->update($request->except('products'));
+
+            // Xử lý cập nhật sản phẩm con
+            // Logic: Nếu có gửi field 'products' lên thì mới xử lý
+            if ($request->has('products')) {
+
+                // B1: Xóa toàn bộ sản phẩm cũ thuộc phiếu này
+                // (Sử dụng DB::table để xóa nhanh, hoặc dùng Model nếu muốn kích hoạt event)
+                DB::table('product_returns')->where('return_form_id', $id)->delete();
+
+                // B2: Thêm lại danh sách sản phẩm mới (nếu mảng không rỗng)
+                if (!empty($request->products)) {
+                    $insertData = [];
+                    $now = now(); // Lấy thời gian hiện tại 1 lần
+
+                    foreach ($request->products as $productData) {
+                        $insertData[] = [
+                            'return_form_id' => $id,
+                            'product_id'     => $productData['product_id'],
+                            'quantity'       => $productData['quantity'],
+                            'serial_number_id' => $productData['serial_number_id'] ?? null,
+                            'replacement_code' => $productData['replacement_code'] ?? null,
+                            'replacement_serial_number_id' => $productData['replacement_serial_number_id'] ?? null,
+                            'extra_warranty' => $productData['extra_warranty'] ?? null,
+                            'notes'          => $productData['notes'] ?? null,
+                            'created_at'     => $now,
+                            'updated_at'     => $now,
+                        ];
+                    }
+
+                    // Insert batch (chèn nhiều dòng 1 lúc để tối ưu hiệu năng)
+                    if (count($insertData) > 0) {
+                        DB::table('product_returns')->insert($insertData);
+                    }
+                }
+            }
+
+            DB::commit();
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Cập nhật thành công',
+                'data' => $returnForm->load('productReturns') // Trả về kèm danh sách sản phẩm mới
+            ], 200);
+        } catch (Exception $e) {
+            DB::rollBack(); // Hoàn tác nếu lỗi
+            return response()->json([
+                'status' => false,
+                'message' => 'Lỗi hệ thống: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * XÓA (DELETE)
+     * DELETE: /return-form/detele/{id}
+     */
+    public function delete(Request $request, $id)
+    {
+        $returnForm = ReturnForm::find($id);
+
+        if (!$returnForm) {
+            return response()->json(['status' => false, 'message' => 'Không tìm thấy phiếu'], 404);
+        }
+
+        DB::beginTransaction();
+        try {
+            // Xóa các sản phẩm con trước
+            ProductReturn::where('return_form_id', $id)->delete();
+
+            // Xóa phiếu trả hàng
+            $returnForm->delete();
+
+            DB::commit();
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Xóa phiếu trả hàng thành công'
+            ], 200);
+        } catch (Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'status' => false,
+                'message' => 'Lỗi hệ thống: ' . $e->getMessage()
+            ], 500);
+        }
     }
 }

@@ -21,6 +21,9 @@ return Application::configure(basePath: dirname(__DIR__))
             'exports/*',
             'receivings',
             'receivings/*',
+            'quotations/*',
+            'return-form/*',
+            'warehouse-transfer/*',
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

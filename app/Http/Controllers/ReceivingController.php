@@ -526,130 +526,149 @@ class ReceivingController extends Controller
             $data = $request->all();
             $perPage = $request->input('limit', 20);
 
-            // 1. Chuẩn bị Subqueries (để lấy serial và tên sản phẩm gộp)
-            $serialAggregate = DB::table('received_products')
-                ->leftJoin('serial_numbers', 'serial_numbers.id', '=', 'received_products.serial_id')
-                ->select(
-                    'received_products.reception_id',
-                    DB::raw('GROUP_CONCAT(DISTINCT serial_numbers.serial_code ORDER BY serial_numbers.serial_code SEPARATOR ", ") AS serial_number')
-                )
-                ->groupBy('received_products.reception_id');
-
-            $productAggregate = DB::table('received_products')
-                ->leftJoin('products', 'products.id', '=', 'received_products.product_id')
-                ->select(
-                    'received_products.reception_id',
-                    DB::raw('GROUP_CONCAT(DISTINCT products.product_name ORDER BY products.product_name SEPARATOR ", ") AS product_name'),
-                    DB::raw('GROUP_CONCAT(DISTINCT products.product_code ORDER BY products.product_code SEPARATOR ", ") AS product_code')
-                )
-                ->groupBy('received_products.reception_id');
-
-            // 2. Bắt đầu Query chính
-            $query = Receiving::query()
-                ->join('users', 'receiving.user_id', '=', 'users.id')
-                ->join('customers', 'receiving.customer_id', '=', 'customers.id')
-                ->leftJoinSub($serialAggregate, 'agg_serials', function ($join) {
-                    $join->on('agg_serials.reception_id', '=', 'receiving.id');
-                })
-                ->leftJoinSub($productAggregate, 'agg_products', function ($join) {
-                    $join->on('agg_products.reception_id', '=', 'receiving.id');
-                })
-                ->select(
-                    'receiving.*',
-                    'users.name as username',
-                    'customers.customer_name as customername',
-                    DB::raw('agg_serials.serial_number as serial_number'),
-                    DB::raw('agg_products.product_name as product_name'),
-                    DB::raw('agg_products.product_code as product_code')
-                );
-
-            // 3. Xử lý điều kiện tìm kiếm (Search)
-            if (!empty($data['search'])) {
-                $query->where(function ($q) use ($data) {
-                    $q->where('receiving.form_code_receiving', 'like', '%' . $data['search'] . '%')
-                        ->orWhere('receiving.notes', 'like', '%' . $data['search'] . '%')
-                        ->orWhere('customers.customer_name', 'like', '%' . $data['search'] . '%') // Tìm theo tên khách lun cho tiện
-                        ->orWhereExists(function ($sub) use ($data) {
-                            $sub->from('received_products')
-                                ->leftJoin('serial_numbers', 'serial_numbers.id', '=', 'received_products.serial_id')
-                                ->whereColumn('received_products.reception_id', 'receiving.id')
-                                ->where('serial_numbers.serial_code', 'like', '%' . $data['search'] . '%');
-                        })
-                        ->orWhereExists(function ($sub) use ($data) {
-                            $sub->from('received_products')
-                                ->leftJoin('products', 'products.id', '=', 'received_products.product_id')
-                                ->whereColumn('received_products.reception_id', 'receiving.id')
-                                ->where(function ($sq) use ($data) {
-                                    $sq->where('products.product_name', 'like', '%' . $data['search'] . '%')
-                                        ->orWhere('products.product_code', 'like', '%' . $data['search'] . '%');
-                                });
-                        });
-                });
-            }
-
-            // 4. Các bộ lọc khác (Filters)
-            if (!empty($data['ma'])) {
-                $query->where('receiving.form_code_receiving', 'like', '%' . $data['ma'] . '%');
-            }
-
-            if (!empty($data['customer'])) {
-                $customerIds = is_array($data['customer']) ? $data['customer'] : [$data['customer']];
-                $query->whereIn('receiving.customer_id', $customerIds);
-            }
-
-            if (!empty($data['date'][0]) && !empty($data['date'][1])) {
-                $dateStart = Carbon::parse($data['date'][0])->startOfDay();
-                $dateEnd = Carbon::parse($data['date'][1])->endOfDay();
-                $query->whereBetween('receiving.date_created', [$dateStart, $dateEnd]);
-            }
-
-            if (!empty($data['closed_at'][0]) && !empty($data['closed_at'][1])) {
-                $dateStart = Carbon::parse($data['closed_at'][0])->startOfDay();
-                $dateEnd = Carbon::parse($data['closed_at'][1])->endOfDay();
-                $query->whereBetween('receiving.closed_at', [$dateStart, $dateEnd]);
-            }
-
-            if (isset($data['form_type'])) {
-                $types = is_array($data['form_type']) ? $data['form_type'] : [$data['form_type']];
-                $query->whereIn('receiving.form_type', $types);
-            }
-
-            if (isset($data['status'])) {
-                $statuses = is_array($data['status']) ? $data['status'] : [$data['status']];
-                $query->whereIn('receiving.status', $statuses);
-            }
-
-            // 5. Sắp xếp (Sorting)
-            if (isset($data['sort']) && isset($data['sort'][0])) {
-                // Cần thêm prefix table nếu sort theo các cột chung chung
-                $sortColumn = $data['sort'][0];
-                $sortDirection = $data['sort'][1] ?? 'asc';
-
-                // Fix lỗi ambiguous column nếu sort theo id, status...
-                if (in_array($sortColumn, ['id', 'status', 'created_at', 'updated_at'])) {
-                    $sortColumn = 'receiving.' . $sortColumn;
-                }
-
-                $query->orderBy($sortColumn, $sortDirection);
-            } else {
-                $query->orderBy('receiving.id', 'desc');
-            }
-
-            // 6. Thực hiện phân trang
-            $receivings = $query->paginate($perPage);
+            $receivings = $this->receivings->getReceiAjax($data, $perPage, true);
 
             return response()->json([
-                'status' => true,
-                'message' => 'Lấy danh sách phiếu tiếp nhận thành công',
-                'data' => $receivings
-            ], 200);
-        } catch (Exception $ex) {
+                'status' => 'success',
+                'data' => $receivings,
+            ]);
+        } catch (Exception $e) {
             return response()->json([
-                'status' => false,
-                'message' => 'Lỗi hệ thống: ' . $ex->getMessage() . ' at line ' . $ex->getLine()
+                'status' => 'error',
+                'message' => $e->getMessage(),
             ], 500);
         }
     }
+    // public function list(Request $request)
+    // {
+    //     try {
+    //         $data = $request->all();
+    //         $perPage = $request->input('limit', 20);
+
+    //         // 1. Chuẩn bị Subqueries (để lấy serial và tên sản phẩm gộp)
+    //         $serialAggregate = DB::table('received_products')
+    //             ->leftJoin('serial_numbers', 'serial_numbers.id', '=', 'received_products.serial_id')
+    //             ->select(
+    //                 'received_products.reception_id',
+    //                 DB::raw('GROUP_CONCAT(DISTINCT serial_numbers.serial_code ORDER BY serial_numbers.serial_code SEPARATOR ", ") AS serial_number')
+    //             )
+    //             ->groupBy('received_products.reception_id');
+
+    //         $productAggregate = DB::table('received_products')
+    //             ->leftJoin('products', 'products.id', '=', 'received_products.product_id')
+    //             ->select(
+    //                 'received_products.reception_id',
+    //                 DB::raw('GROUP_CONCAT(DISTINCT products.product_name ORDER BY products.product_name SEPARATOR ", ") AS product_name'),
+    //                 DB::raw('GROUP_CONCAT(DISTINCT products.product_code ORDER BY products.product_code SEPARATOR ", ") AS product_code')
+    //             )
+    //             ->groupBy('received_products.reception_id');
+
+    //         // 2. Bắt đầu Query chính
+    //         $query = Receiving::query()
+    //             ->join('users', 'receiving.user_id', '=', 'users.id')
+    //             ->join('customers', 'receiving.customer_id', '=', 'customers.id')
+    //             ->leftJoinSub($serialAggregate, 'agg_serials', function ($join) {
+    //                 $join->on('agg_serials.reception_id', '=', 'receiving.id');
+    //             })
+    //             ->leftJoinSub($productAggregate, 'agg_products', function ($join) {
+    //                 $join->on('agg_products.reception_id', '=', 'receiving.id');
+    //             })
+    //             ->select(
+    //                 'receiving.*',
+    //                 'users.name as username',
+    //                 'customers.customer_name as customername',
+    //                 DB::raw('agg_serials.serial_number as serial_number'),
+    //                 DB::raw('agg_products.product_name as product_name'),
+    //                 DB::raw('agg_products.product_code as product_code')
+    //             );
+
+    //         // 3. Xử lý điều kiện tìm kiếm (Search)
+    //         if (!empty($data['search'])) {
+    //             $query->where(function ($q) use ($data) {
+    //                 $q->where('receiving.form_code_receiving', 'like', '%' . $data['search'] . '%')
+    //                     ->orWhere('receiving.notes', 'like', '%' . $data['search'] . '%')
+    //                     ->orWhere('customers.customer_name', 'like', '%' . $data['search'] . '%') // Tìm theo tên khách lun cho tiện
+    //                     ->orWhereExists(function ($sub) use ($data) {
+    //                         $sub->from('received_products')
+    //                             ->leftJoin('serial_numbers', 'serial_numbers.id', '=', 'received_products.serial_id')
+    //                             ->whereColumn('received_products.reception_id', 'receiving.id')
+    //                             ->where('serial_numbers.serial_code', 'like', '%' . $data['search'] . '%');
+    //                     })
+    //                     ->orWhereExists(function ($sub) use ($data) {
+    //                         $sub->from('received_products')
+    //                             ->leftJoin('products', 'products.id', '=', 'received_products.product_id')
+    //                             ->whereColumn('received_products.reception_id', 'receiving.id')
+    //                             ->where(function ($sq) use ($data) {
+    //                                 $sq->where('products.product_name', 'like', '%' . $data['search'] . '%')
+    //                                     ->orWhere('products.product_code', 'like', '%' . $data['search'] . '%');
+    //                             });
+    //                     });
+    //             });
+    //         }
+
+    //         // 4. Các bộ lọc khác (Filters)
+    //         if (!empty($data['ma'])) {
+    //             $query->where('receiving.form_code_receiving', 'like', '%' . $data['ma'] . '%');
+    //         }
+
+    //         if (!empty($data['customer'])) {
+    //             $customerIds = is_array($data['customer']) ? $data['customer'] : [$data['customer']];
+    //             $query->whereIn('receiving.customer_id', $customerIds);
+    //         }
+
+    //         if (!empty($data['date'][0]) && !empty($data['date'][1])) {
+    //             $dateStart = Carbon::parse($data['date'][0])->startOfDay();
+    //             $dateEnd = Carbon::parse($data['date'][1])->endOfDay();
+    //             $query->whereBetween('receiving.date_created', [$dateStart, $dateEnd]);
+    //         }
+
+    //         if (!empty($data['closed_at'][0]) && !empty($data['closed_at'][1])) {
+    //             $dateStart = Carbon::parse($data['closed_at'][0])->startOfDay();
+    //             $dateEnd = Carbon::parse($data['closed_at'][1])->endOfDay();
+    //             $query->whereBetween('receiving.closed_at', [$dateStart, $dateEnd]);
+    //         }
+
+    //         if (isset($data['form_type'])) {
+    //             $types = is_array($data['form_type']) ? $data['form_type'] : [$data['form_type']];
+    //             $query->whereIn('receiving.form_type', $types);
+    //         }
+
+    //         if (isset($data['status'])) {
+    //             $statuses = is_array($data['status']) ? $data['status'] : [$data['status']];
+    //             $query->whereIn('receiving.status', $statuses);
+    //         }
+
+    //         // 5. Sắp xếp (Sorting)
+    //         if (isset($data['sort']) && isset($data['sort'][0])) {
+    //             // Cần thêm prefix table nếu sort theo các cột chung chung
+    //             $sortColumn = $data['sort'][0];
+    //             $sortDirection = $data['sort'][1] ?? 'asc';
+
+    //             // Fix lỗi ambiguous column nếu sort theo id, status...
+    //             if (in_array($sortColumn, ['id', 'status', 'created_at', 'updated_at'])) {
+    //                 $sortColumn = 'receiving.' . $sortColumn;
+    //             }
+
+    //             $query->orderBy($sortColumn, $sortDirection);
+    //         } else {
+    //             $query->orderBy('receiving.id', 'desc');
+    //         }
+
+    //         // 6. Thực hiện phân trang
+    //         $receivings = $query->paginate($perPage);
+
+    //         return response()->json([
+    //             'status' => true,
+    //             'message' => 'Lấy danh sách phiếu tiếp nhận thành công',
+    //             'data' => $receivings
+    //         ], 200);
+    //     } catch (Exception $ex) {
+    //         return response()->json([
+    //             'status' => false,
+    //             'message' => 'Lỗi hệ thống: ' . $ex->getMessage() . ' at line ' . $ex->getLine()
+    //         ], 500);
+    //     }
+    // }
 
     // API lấy chi tiết phiếu tiếp nhận
     public function detail($id)

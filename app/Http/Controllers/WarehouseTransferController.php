@@ -8,8 +8,13 @@ use App\Models\SerialNumber;
 use App\Models\Warehouse;
 use App\Models\WarehouseTransfer;
 use App\Models\WarehouseTransferItem;
+use Exception;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
+use App\Http\Requests\StoreWarehouseTransferRequest;
+use App\Http\Requests\UpdateWarehouseTransferRequest;
 
 class WarehouseTransferController extends Controller
 {
@@ -101,7 +106,7 @@ class WarehouseTransferController extends Controller
                                 if (!isset($productData[$productCode])) {
                                     $productData[$productCode] = [];
                                 }
-                                
+
                                 if ($data['from_warehouse_id'] == 2) {
                                     // Trả bảo hành: hiển thị serial trả -> serial mượn
                                     $serialReturn = isset($serial['serial']) ? trim($serial['serial']) : '';
@@ -121,7 +126,7 @@ class WarehouseTransferController extends Controller
                     }
                 }
             }
-            
+
             // Tạo chuỗi note với format khác nhau cho từng loại
             $noteParts = [];
             foreach ($productData as $productCode => $serials) {
@@ -133,7 +138,7 @@ class WarehouseTransferController extends Controller
                 }
             }
             $noteContent = implode(', ', $noteParts);
-            
+
             if ($data['from_warehouse_id'] == 2) {
                 $note = "TRẢ BẢO HÀNH {$noteContent}";
             } else {
@@ -165,7 +170,7 @@ class WarehouseTransferController extends Controller
                         $serial->status = 1;
                         $serial->warehouse_id = $warehouseTransfer->from_warehouse_id;
                         $serial->save();
-                        
+
                         // Cập nhật warehouse_id trong inventory_lookup
                         DB::table('inventory_lookup')
                             ->where('sn_id', $serial->id)
@@ -194,7 +199,7 @@ class WarehouseTransferController extends Controller
                         $borrow->status = 5;
                         $borrow->warehouse_id = $warehouseTransfer->from_warehouse_id;
                         $borrow->save();
-                        
+
                         // Cập nhật warehouse_id trong inventory_lookup cho serial borrow
                         DB::table('inventory_lookup')
                             ->where('sn_id', $borrow->id)
@@ -248,5 +253,146 @@ class WarehouseTransferController extends Controller
             ]);
         }
         return false;
+    }
+
+    /**
+     * 1. DANH SÁCH (Có phân trang & Tìm kiếm)
+     */
+    public function list(Request $request)
+    {
+        $query = WarehouseTransfer::query();
+
+        // Eager load relationships để tránh N+1 query (nếu có model Warehouse và User)
+        // $query->with(['user', 'fromWarehouse', 'toWarehouse']);
+
+        // Tìm kiếm theo mã phiếu
+        if ($request->has('code')) {
+            $query->where('code', 'like', '%' . $request->code . '%');
+        }
+
+        // Lọc theo trạng thái
+        if ($request->has('status')) {
+            $query->where('status', $request->status);
+        }
+
+        // Lọc theo ngày
+        if ($request->has('from_date') && $request->has('to_date')) {
+            $query->whereBetween('transfer_date', [$request->from_date, $request->to_date]);
+        }
+
+        // Sắp xếp mới nhất trước
+        $transfers = $query->orderBy('id', 'desc')->paginate(10);
+
+        return response()->json([
+            'success' => true,
+            'data'    => $transfers
+        ]);
+    }
+
+    /**
+     * 2. TẠO MỚI
+     */
+    public function add(StoreWarehouseTransferRequest $request)
+    {
+        // Lấy dữ liệu đã validate
+        $data = $request->validated();
+
+        // Tự động gán user_id từ người đang đăng nhập (Nếu dùng Sanctum/Passport)
+        // Nếu không dùng Auth, bạn cần gửi user_id từ client lên
+        $data['user_id'] = Auth::id() ?? $request->input('user_id', 1); // Fallback là 1 nếu test
+
+        // Nếu không gửi ngày, mặc định là now()
+        if (!isset($data['transfer_date'])) {
+            $data['transfer_date'] = now();
+        }
+
+        $transfer = WarehouseTransfer::create($data);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Tạo phiếu chuyển kho thành công.',
+            'data'    => $transfer
+        ], 201);
+    }
+
+    /**
+     * 3. CHI TIẾT
+     */
+    public function detail($id)
+    {
+        // Tìm và load kèm thông tin liên quan
+        // $transfer = WarehouseTransfer::with(['user', 'fromWarehouse', 'toWarehouse'])->find($id);
+        $transfer = WarehouseTransfer::find($id);
+
+        if (!$transfer) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Không tìm thấy phiếu chuyển kho.'
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data'    => $transfer
+        ]);
+    }
+
+    /**
+     * 4. CẬP NHẬT (SỬA)
+     */
+    public function change(UpdateWarehouseTransferRequest $request, $id)
+    {
+        $transfer = WarehouseTransfer::find($id);
+
+        if (!$transfer) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Không tìm thấy phiếu chuyển kho.'
+            ], 404);
+        }
+
+        // Kiểm tra logic nghiệp vụ: Ví dụ phiếu đã hoàn thành (status 1) thì không cho sửa
+        /*
+        if ($transfer->status == 1) {
+             return response()->json(['message' => 'Phiếu đã hoàn thành, không thể chỉnh sửa.'], 403);
+        }
+        */
+
+        $transfer->update($request->validated());
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Cập nhật phiếu chuyển kho thành công.',
+            'data'    => $transfer
+        ]);
+    }
+
+    /**
+     * 5. XÓA
+     */
+    public function delete($id)
+    {
+        $transfer = WarehouseTransfer::find($id);
+
+        if (!$transfer) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Không tìm thấy phiếu chuyển kho.'
+            ], 404);
+        }
+
+        // Kiểm tra logic nghiệp vụ: Chỉ cho xóa khi trạng thái là hủy hoặc mới tạo
+        /*
+        if ($transfer->status == 1) {
+             return response()->json(['message' => 'Không thể xóa phiếu đã hoàn thành.'], 403);
+        }
+        */
+
+        $transfer->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Đã xóa phiếu chuyển kho.'
+        ]);
     }
 }

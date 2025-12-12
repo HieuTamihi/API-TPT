@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Models\Customers;
 use App\Models\User;
 // use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
@@ -25,5 +26,10 @@ class DatabaseSeeder extends Seeder
         $this->call(ProviderSeeder::class);
         $this->call(SerialNumberSeeder::class);
         $this->call(InventoryLookupSeeder::class);
+        $this->call(CustomerSeeder::class);
+        $this->call(ReceivingSeeder::class);
+        $this->call(SerialNumberSeeder::class);
+        $this->call(WarrantyLookupSeeder::class);
+        $this->call(QuotationsTableSeeder::class);
     }
 }

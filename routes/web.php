@@ -27,6 +27,33 @@ use App\Http\Middleware\CorsMiddleware;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 
+Route::prefix('warehouse-transfer')->group(function () {
+    Route::get('/list', [WarehouseTransferController::class, 'list']);
+    Route::get('detail/{id}', [WarehouseTransferController::class, 'detail']);
+    Route::post('/add', [WarehouseTransferController::class, 'add']);
+    Route::get('/detail/{id}', [WarehouseTransferController::class, 'detail']);
+    Route::put('/change/{id}', [WarehouseTransferController::class, 'change']);
+    Route::delete('/delete/{id}', [WarehouseTransferController::class, 'delete']);
+});
+
+Route::prefix('return-form')->group(function () {
+    Route::get('/list', [ReturnFormController::class, 'list']);
+    Route::get('detail/{id}', [ReturnFormController::class, 'detail']);
+    Route::post('/add', [ReturnFormController::class, 'add']);
+    Route::get('/detail/{id}', [ReturnFormController::class, 'detail']);
+    Route::put('/change/{id}', [ReturnFormController::class, 'change']);
+    Route::delete('/delete/{id}', [ReturnFormController::class, 'delete']);
+});
+
+Route::prefix('quotations')->group(function () {
+    Route::get('/list', [QuotationController::class, 'list']);
+    Route::get('detail/{id}', [QuotationController::class, 'detail']);
+    Route::post('/add', [QuotationController::class, 'add']);
+    Route::get('/detail/{id}', [QuotationController::class, 'detail']);
+    Route::put('/change/{id}', [QuotationController::class, 'change']);
+    Route::delete('/delete/{id}', [QuotationController::class, 'delete']);
+});
+
 Route::prefix('receivings')->group(function () {
     Route::get('/list', [ReceivingController::class, 'list']);
     Route::get('detail/{id}', [ReceivingController::class, 'detail']);

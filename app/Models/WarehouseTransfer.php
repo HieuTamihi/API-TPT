@@ -9,6 +9,20 @@ use Illuminate\Support\Facades\DB;
 
 class WarehouseTransfer extends Model
 {
+
+    protected $table = 'warehouse_transfers';
+
+    // --- THÊM ĐOẠN NÀY ---
+    protected $fillable = [
+        'code',              // <--- Lỗi đang báo thiếu trường này
+        'user_id',
+        'from_warehouse_id',
+        'to_warehouse_id',
+        'transfer_date',
+        'status',
+        'note',
+    ];
+
     public static function generateExportCode()
     {
         $prefix = 'PCK';
@@ -50,7 +64,7 @@ class WarehouseTransfer extends Model
                                 if (!isset($productData[$productCode])) {
                                     $productData[$productCode] = [];
                                 }
-                                
+
                                 if ($data['from_warehouse_id'] == 2) {
                                     // Trả bảo hành: hiển thị serial trả -> serial mượn
                                     $serialReturn = isset($serial['serial']) ? trim($serial['serial']) : '';
@@ -70,7 +84,7 @@ class WarehouseTransfer extends Model
                     }
                 }
             }
-            
+
             // Tạo chuỗi note với format khác nhau cho từng loại
             $noteParts = [];
             foreach ($productData as $productCode => $serials) {
@@ -82,7 +96,7 @@ class WarehouseTransfer extends Model
                 }
             }
             $noteContent = implode(', ', $noteParts);
-            
+
             if ($data['from_warehouse_id'] == 2) {
                 $note = "TRẢ BẢO HÀNH {$noteContent}";
             } else {
@@ -97,7 +111,7 @@ class WarehouseTransfer extends Model
         $warehouseTransfer->to_warehouse_id = $data['to_warehouse_id'];
         $warehouseTransfer->status = 1;
         $warehouseTransfer->note = $note;
-        $warehouseTransfer->user_id = Auth::user()->id;
+        $warehouseTransfer->user_id = Auth::user()->id ?? 1;
         $warehouseTransfer->save();
 
         return $warehouseTransfer->id;
@@ -185,7 +199,7 @@ class WarehouseTransfer extends Model
                 $warehouse->where($field, 'like', '%' . $data[$key] . '%');
             }
         }
-        
+
         // Lọc theo serial number
         if (!empty($data['serial'])) {
             $warehouse->where(function ($query) use ($data) {
@@ -196,13 +210,13 @@ class WarehouseTransfer extends Model
                         ->whereColumn('warehouse_transfer_items.transfer_id', 'warehouse_transfers.id')
                         ->where('serial_numbers.serial_code', 'like', '%' . $data['serial'] . '%');
                 })
-                ->orWhereExists(function ($subQuery) use ($data) {
-                    $subQuery->select(DB::raw(1))
-                        ->from('warehouse_transfer_items')
-                        ->join('serial_numbers', 'warehouse_transfer_items.sn_id_borrow', '=', 'serial_numbers.id')
-                        ->whereColumn('warehouse_transfer_items.transfer_id', 'warehouse_transfers.id')
-                        ->where('serial_numbers.serial_code', 'like', '%' . $data['serial'] . '%');
-                });
+                    ->orWhereExists(function ($subQuery) use ($data) {
+                        $subQuery->select(DB::raw(1))
+                            ->from('warehouse_transfer_items')
+                            ->join('serial_numbers', 'warehouse_transfer_items.sn_id_borrow', '=', 'serial_numbers.id')
+                            ->whereColumn('warehouse_transfer_items.transfer_id', 'warehouse_transfers.id')
+                            ->where('serial_numbers.serial_code', 'like', '%' . $data['serial'] . '%');
+                    });
             });
         }
         if (isset($data['date']) && is_array($data['date']) && count($data['date']) >= 2 && !empty($data['date'][0]) && !empty($data['date'][1])) {

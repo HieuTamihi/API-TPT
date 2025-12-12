@@ -11,6 +11,7 @@ use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Validator;
 
 class QuotationController extends Controller
 {
@@ -238,66 +239,231 @@ class QuotationController extends Controller
     }
 
     // API danh sách tất cả có phân trang và lọc, phiếu báo giá
+
     public function list(Request $request)
     {
-        // Khởi tạo query và Eager Loading các quan hệ
-        $query = Quotation::with(['customer', 'reception', 'createdBy']);
-
-        // --- Bắt đầu Logic Lọc (tương tự getQuotationAjax) ---
-
-        // 1. Tìm kiếm chung (Mã hoặc Ghi chú)
-        if ($request->has('search') && $request->search != '') {
-            $search = $request->search;
-            $query->where(function ($q) use ($search) {
-                $q->where('quotation_code', 'like', '%' . $search . '%')
-                    ->orWhere('notes', 'like', '%' . $search . '%');
-            });
-        }
-
-        // 2. Lọc theo Khách hàng
-        if ($request->has('customer_id')) {
-            // Hỗ trợ truyền 1 id hoặc mảng id
-            $customerIds = is_array($request->customer_id) ? $request->customer_id : [$request->customer_id];
-            $query->whereIn('customer_id', $customerIds);
-        }
-
-        // 3. Lọc theo Mã phiếu tiếp nhận (Receiving Code)
-        if ($request->has('receiving_code')) {
-            $receivingCode = $request->receiving_code;
-            $query->whereHas('reception', function ($q) use ($receivingCode) {
-                $q->where('form_code_receiving', 'like', '%' . $receivingCode . '%');
-            });
-        }
-
-        // 4. Lọc theo Ngày (Range)
-        if ($request->has('date_start') && $request->has('date_end')) {
-            $startDate = Carbon::parse($request->date_start)->startOfDay();
-            $endDate = Carbon::parse($request->date_end)->endOfDay();
-            $query->whereBetween('quotation_date', [$startDate, $endDate]);
-        }
-
-        // 5. Lọc theo Tổng tiền (Range)
-        if ($request->has('min_amount') && $request->has('max_amount')) {
-            $query->whereBetween('total_amount', [$request->min_amount, $request->max_amount]);
-        }
-
-        // 6. Sắp xếp
-        if ($request->has('sort_by') && $request->has('sort_dir')) {
-            $query->orderBy($request->sort_by, $request->sort_dir); // vd: id, desc
-        } else {
-            $query->orderBy('id', 'desc'); // Mặc định mới nhất lên đầu
-        }
-
-        // --- Kết thúc Logic Lọc ---
-
-        // Phân trang (Mặc định 10 phần tử/trang)
-        $perPage = $request->get('per_page', 10);
-        $quotations = $query->paginate($perPage);
-
+        $data = $request->all();
+        $quotations = $this->quotations->getQuotationAjax($data);
         return response()->json([
             'status' => true,
             'message' => 'Lấy danh sách thành công',
             'data' => $quotations
         ], 200);
+    }
+
+    // public function list(Request $request)
+    // {
+    //     // Khởi tạo query và Eager Loading các quan hệ
+    //     $query = Quotation::with(['customer', 'reception', 'createdBy']);
+
+    //     // --- Bắt đầu Logic Lọc (tương tự getQuotationAjax) ---
+
+    //     // 1. Tìm kiếm chung (Mã hoặc Ghi chú)
+    //     if ($request->has('search') && $request->search != '') {
+    //         $search = $request->search;
+    //         $query->where(function ($q) use ($search) {
+    //             $q->where('quotation_code', 'like', '%' . $search . '%')
+    //                 ->orWhere('notes', 'like', '%' . $search . '%');
+    //         });
+    //     }
+
+    //     // 2. Lọc theo Khách hàng
+    //     if ($request->has('customer_id')) {
+    //         // Hỗ trợ truyền 1 id hoặc mảng id
+    //         $customerIds = is_array($request->customer_id) ? $request->customer_id : [$request->customer_id];
+    //         $query->whereIn('customer_id', $customerIds);
+    //     }
+
+    //     // 3. Lọc theo Mã phiếu tiếp nhận (Receiving Code)
+    //     if ($request->has('receiving_code')) {
+    //         $receivingCode = $request->receiving_code;
+    //         $query->whereHas('reception', function ($q) use ($receivingCode) {
+    //             $q->where('form_code_receiving', 'like', '%' . $receivingCode . '%');
+    //         });
+    //     }
+
+    //     // 4. Lọc theo Ngày (Range)
+    //     if ($request->has('date_start') && $request->has('date_end')) {
+    //         $startDate = Carbon::parse($request->date_start)->startOfDay();
+    //         $endDate = Carbon::parse($request->date_end)->endOfDay();
+    //         $query->whereBetween('quotation_date', [$startDate, $endDate]);
+    //     }
+
+    //     // 5. Lọc theo Tổng tiền (Range)
+    //     if ($request->has('min_amount') && $request->has('max_amount')) {
+    //         $query->whereBetween('total_amount', [$request->min_amount, $request->max_amount]);
+    //     }
+
+    //     // 6. Sắp xếp
+    //     if ($request->has('sort_by') && $request->has('sort_dir')) {
+    //         $query->orderBy($request->sort_by, $request->sort_dir); // vd: id, desc
+    //     } else {
+    //         $query->orderBy('id', 'desc'); // Mặc định mới nhất lên đầu
+    //     }
+
+    //     // --- Kết thúc Logic Lọc ---
+
+    //     // Phân trang (Mặc định 10 phần tử/trang)
+    //     $perPage = $request->get('per_page', 10);
+    //     $quotations = $query->paginate($perPage);
+
+    //     return response()->json([
+    //         'status' => true,
+    //         'message' => 'Lấy danh sách thành công',
+    //         'data' => $quotations
+    //     ], 200);
+    // }
+
+    /**
+     * CHI TIẾT (DETAIL)
+     * GET: /quotations/detail/{id}
+     */
+    public function detail($id)
+    {
+        $quotation = Quotation::with(['customer', 'reception', 'services', 'createdBy'])->find($id);
+
+        if (!$quotation) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Không tìm thấy phiếu báo giá',
+            ], 404);
+        }
+
+        return response()->json([
+            'status' => true,
+            'data' => $quotation
+        ], 200);
+    }
+
+    /**
+     * THÊM MỚI (CREATE)
+     * POST: /quotations/add
+     */
+    public function add(Request $request)
+    {
+        // Validate dữ liệu
+        $validator = Validator::make($request->all(), [
+            'reception_id'   => 'required|exists:receiving,id', // Đảm bảo ID có tồn tại
+            'quotation_code' => 'required|unique:quotations,quotation_code|max:255',
+            'customer_id'    => 'required|exists:customers,id',
+            'address'        => 'nullable|string|max:255',
+            'quotation_date' => 'required|date',
+            'contact_person' => 'nullable|string|max:255',
+            'notes'          => 'nullable|string',
+            'user_id'        => 'required|exists:users,id',
+            'contact_phone'  => 'nullable|string|max:20',
+            'total_amount'   => 'required|numeric|min:0',
+        ], [
+            'reception_id.required'   => 'Vui lòng chọn phiếu tiếp nhận',
+            'quotation_code.unique'   => 'Mã báo giá đã tồn tại',
+            'customer_id.required'    => 'Vui lòng chọn khách hàng',
+            'total_amount.required'   => 'Vui lòng nhập tổng tiền',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Lỗi dữ liệu đầu vào',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        try {
+            $quotation = Quotation::create($request->all());
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Tạo phiếu báo giá thành công',
+                'data' => $quotation
+            ], 201);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Lỗi hệ thống: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * CẬP NHẬT (change)
+     * PUT: /quotations/change/{id}
+     */
+    public function change(Request $request, $id)
+    {
+        $quotation = Quotation::find($id);
+
+        if (!$quotation) {
+            return response()->json(['status' => false, 'message' => 'Không tìm thấy phiếu'], 404);
+        }
+
+        // Validate
+        $validator = Validator::make($request->all(), [
+            // Các trường bắt buộc phải check tồn tại nếu có gửi lên
+            'reception_id'   => 'sometimes|exists:receiving,id',
+            'customer_id'    => 'sometimes|exists:customers,id',
+            'user_id'        => 'sometimes|exists:users,id',
+            'quotation_code' => 'sometimes|max:255|unique:quotations,quotation_code,' . $id,
+            'quotation_date' => 'sometimes|date',
+            'total_amount'   => 'sometimes|numeric|min:0',
+            'address'        => 'sometimes|nullable|string|max:255',
+            'contact_person' => 'sometimes|nullable|string|max:255',
+            'contact_phone'  => 'sometimes|nullable|string|max:20',
+            'notes'          => 'sometimes|nullable|string',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Lỗi dữ liệu cập nhật',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        try {
+            // update($request->all()) sẽ chỉ update các trường có trong mảng $fillable của Model
+            // và có xuất hiện trong $request
+            $quotation->update($request->all());
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Cập nhật thành công',
+                'data' => $quotation
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Lỗi hệ thống: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * XÓA (DELETE)
+     * DELETE: /api/quotations/{id}
+     */
+    public function delete($id)
+    {
+        $quotation = Quotation::find($id);
+
+        if (!$quotation) {
+            return response()->json(['status' => false, 'message' => 'Không tìm thấy phiếu'], 404);
+        }
+
+        try {
+            // Có thể cần xóa các services liên quan trước nếu không có cascade delete
+            // $quotation->services()->delete(); 
+            
+            $quotation->delete();
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Xóa phiếu báo giá thành công'
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Lỗi khi xóa: ' . $e->getMessage()
+            ], 500);
+        }
     }
 }
