@@ -73,22 +73,21 @@ Route::prefix('imports')->group(function () {
 });
 
 Route::prefix('exports')->group(function () {
-    
+
     // Lấy danh sách (GET /api/exports?page=1&search=...)
     Route::get('/list', [ExportsController::class, 'list']);
-    
+
     // Tạo mới (POST /api/exports)
     Route::post('/add', [ExportsController::class, 'add']);
-    
+
     // Xem chi tiết (GET /api/exports/{id})
     Route::get('/detail/{id}', [ExportsController::class, 'detail']);
-    
+
     // Cập nhật (PUT/PATCH /api/exports/{id})
     Route::put('/change/{id}', [ExportsController::class, 'change']);
-    
+
     // Xóa (DELETE /api/exports/{id})
     Route::delete('/delete/{id}', [ExportsController::class, 'delete']);
-    
 });
 
 // Database Management Routes (Admin only)

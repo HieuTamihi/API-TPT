@@ -8,6 +8,7 @@ use App\Models\Providers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Maatwebsite\Excel\Facades\Excel;
+use Illuminate\Http\JsonResponse;
 
 class ProvidersController extends Controller
 {
@@ -192,5 +193,242 @@ class ProvidersController extends Controller
         }
 
         return redirect()->route('providers.index')->with('success', 'Cập nhật hàng loạt thành công!');
+    }
+
+    /**
+     * Danh sách nhà cung cấp + tìm kiếm + lọc + sắp xếp + phân trang
+     */
+    public function list(Request $request): JsonResponse
+    {
+        $inputData = [];
+
+        // Tìm kiếm chung
+        if ($request->filled('search')) {
+            $inputData['search'] = $request->search;
+        }
+
+        // Bộ lọc chi tiết từ modal
+        if ($request->filled('ma')) $inputData['ma'] = $request->ma;
+        if ($request->filled('ten')) $inputData['ten'] = $request->ten;
+        if ($request->filled('address')) $inputData['address'] = $request->address;
+        if ($request->filled('phone')) $inputData['phone'] = $request->phone;
+        if ($request->filled('email')) $inputData['email'] = $request->email;
+        if ($request->filled('note')) $inputData['note'] = $request->note;
+
+        // Sắp xếp
+        if ($request->has('sort_by') && $request->has('sort_dir')) {
+            $sortMap = [
+                'code'    => 'provider_code',
+                'name'    => 'provider_name',
+                'address' => 'address',
+                'phone'   => 'phone',
+                'email'   => 'email',
+                'note'    => 'note',
+            ];
+            $field = $sortMap[$request->sort_by] ?? 'id';
+            $inputData['sort'] = [$field, $request->sort_dir];
+        }
+
+        // Xây dựng query giống logic trong getAllProvide
+        $query = DB::table('providers');
+
+        if (!empty($inputData['search'])) {
+            $search = $inputData['search'];
+            $query->where(function ($q) use ($search) {
+                $q->where('provider_code', 'like', "%{$search}%")
+                    ->orWhere('provider_name', 'like', "%{$search}%")
+                    ->orWhere('address', 'like', "%{$search}%")
+                    ->orWhere('phone', 'like', "%{$search}%")
+                    ->orWhere('email', 'like', "%{$search}%")
+                    ->orWhere('note', 'like', "%{$search}%");
+            });
+        }
+
+        $filterable = [
+            'ma'      => 'provider_code',
+            'ten'     => 'provider_name',
+            'address' => 'address',
+            'phone'   => 'phone',
+            'email'   => 'email',
+            'note'    => 'note',
+        ];
+
+        foreach ($filterable as $key => $field) {
+            if (!empty($inputData[$key])) {
+                $query->where($field, 'like', "%{$inputData[$key]}%");
+            }
+        }
+
+        if (isset($inputData['sort'])) {
+            $query->orderBy($inputData['sort'][0], $inputData['sort'][1]);
+        } else {
+            $query->orderBy('id', 'desc');
+        }
+
+        // Phân trang
+        $perPage = $request->get('per_page', 20);
+        $providers = $query->paginate($perPage);
+
+        // Format dữ liệu trả về giống frontend
+        $data = collect($providers->items())->map(function ($item) {
+            return [
+                'id'             => $item->id,
+                'code'           => $item->provider_code,
+                'name'           => $item->provider_name,
+                'address'        => $item->address ?? '',
+                'contact_person' => $item->contact_person ?? '',
+                'phone'          => $item->phone ?? '',
+                'email'          => $item->email ?? '',
+                'tax_code'       => $item->tax_code ?? '',
+                'note'           => $item->note ?? '',
+                'group_id'       => $item->group_id,
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'data'    => $data,
+            'pagination' => [
+                'current_page' => $providers->currentPage(),
+                'last_page'    => $providers->lastPage(),
+                'per_page'     => $providers->perPage(),
+                'total'        => $providers->total(),
+            ]
+        ]);
+    }
+
+    /**
+     * Tạo mới nhà cung cấp
+     */
+    public function add(Request $request): JsonResponse
+    {
+        $request->validate([
+            'provider_code'   => 'required|string|max:255',
+            'provider_name'   => 'required|string|max:255',
+            'category_id'     => 'nullable|integer|exists:groups,id', // group_id
+            'address'         => 'nullable|string',
+            'contact_person'  => 'nullable|string',
+            'phone'           => 'nullable|string',
+            'email'           => 'nullable|email',
+            'tax_code'        => 'nullable|string',
+            'note'            => 'nullable|string',
+        ]);
+
+        $data = $request->all();
+        $data['category_id'] = $data['category_id'] ?? 0;
+
+        $result = $this->providers->addProvide($data);
+
+        if ($result['status'] ?? false) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Mã nhà cung cấp hoặc Tên nhà cung cấp đã tồn tại!'
+            ], 422);
+        }
+
+        // Lấy bản ghi mới tạo
+        $newProvider = $this->providers->find($result['id'] ?? null);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Tạo nhà cung cấp thành công',
+            'data'    => $newProvider
+        ], 201);
+    }
+
+    /**
+     * Cập nhật nhà cung cấp
+     */
+    public function change(Request $request, $id): JsonResponse
+    {
+        $request->validate([
+            'provider_code'   => 'required|string|max:255',
+            'provider_name'   => 'required|string|max:255',
+            'category_id'     => 'nullable|integer|exists:groups,id',
+            'address'         => 'nullable|string',
+            'contact_person'  => 'nullable|string',
+            'phone'           => 'nullable|string',
+            'email'           => 'nullable|email',
+            'tax_code'        => 'nullable|string',
+            'note'            => 'nullable|string',
+        ]);
+
+        $data = $request->all();
+        $data['category_id'] = $data['category_id'] ?? 0;
+
+        $exist = $this->providers->updateProvide($data, $id);
+
+        if ($exist) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Mã nhà cung cấp hoặc Tên nhà cung cấp đã tồn tại ở bản ghi khác!'
+            ], 422);
+        }
+
+        $updatedProvider = $this->providers->find($id);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Cập nhật thành công',
+            'data'    => $updatedProvider
+        ]);
+    }
+
+    /**
+     * Chi tiết nhà cung cấp
+     */
+    public function detail($id): JsonResponse
+    {
+        $provider = $this->providers->find($id);
+
+        if (!$provider) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Không tìm thấy nhà cung cấp'
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data'    => $provider
+        ]);
+    }
+
+    /**
+     * Xóa nhà cung cấp
+     */
+    public function delete($id): JsonResponse
+    {
+        $deleted = $this->providers->where('id', $id)->delete();
+
+        if ($deleted) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Xóa thành công'
+            ]);
+        }
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Không tìm thấy nhà cung cấp'
+        ], 404);
+    }
+
+    /**
+     * Lấy danh sách nhóm thuộc loại "Nhà cung cấp" để chọn khi tạo/sửa
+     */
+    public function groups(): JsonResponse
+    {
+        $groups = Groups::whereHas('type', function ($q) {
+            $q->where('group_name', 'Nhà cung cấp'); // hoặc where('id', 2) nếu biết ID
+        })
+            ->select('id', 'group_code', 'group_name')
+            ->orderBy('group_name')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data'    => $groups
+        ]);
     }
 }
