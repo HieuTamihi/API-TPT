@@ -43,8 +43,8 @@ class ImportsController extends Controller
         // Hỗ trợ phân trang và lọc qua query params để tìm kiếm giữa các trang
         $imports = $this->imports->paginateForIndex(request()->all(), 25);
         // Chỉ lấy các cột cần thiết để giảm tải
-        $users = User::select('id','name')->get();
-        $providers = Providers::select('id','provider_name')->get();
+        $users = User::select('id', 'name')->get();
+        $providers = Providers::select('id', 'provider_name')->get();
         return view('expertise.import.index', compact('title', 'imports', 'users', 'providers'));
     }
 
@@ -63,7 +63,12 @@ class ImportsController extends Controller
             // BOM để Excel mở UTF-8 chuẩn
             fprintf($file, chr(0xEF) . chr(0xBB) . chr(0xBF));
             fputcsv($file, [
-                'Mã phiếu', 'Ngày lập phiếu', 'Nhà cung cấp', 'Kho', 'Người lập phiếu', 'Ghi chú',
+                'Mã phiếu',
+                'Ngày lập phiếu',
+                'Nhà cung cấp',
+                'Kho',
+                'Người lập phiếu',
+                'Ghi chú',
             ]);
             foreach ($rows as $item) {
                 fputcsv($file, [
@@ -691,29 +696,46 @@ class ImportsController extends Controller
     /**
      * 1. Lấy danh sách phiếu nhập (Có tìm kiếm, lọc, phân trang)
      */
-    public function list(Request $request) {
+    public function list(Request $request)
+    {
         try {
-            // Lấy tham số từ request
-            $data = $request->all();
-            
-            // Thiết lập số lượng bản ghi trên 1 trang (mặc định 20)
             $perPage = $request->input('limit', 20);
+            $data = $request->all();
 
-            // Sử dụng method paginateForIndex có sẵn trong Model của bạn
-            // Method này đã bao gồm logic filter, search, sort rất chi tiết
-            $imports = $this->imports->paginateForIndex($data, $perPage);
+            // --- SỬA ĐOẠN NÀY ---
+            // Thay vì dùng $this->imports->paginateForIndex (có thể hàm này chưa join bảng)
+            // Hãy dùng Eloquent chuẩn với 'with'
+
+            $query = Imports::with([
+                'provider:id,provider_name',   // Lấy tên nhà cung cấp
+                'warehouse:id,warehouse_name', // Lấy tên kho
+                'user:id,name'                 // Lấy tên người lập
+            ]);
+
+            // Thêm các logic lọc (Filter) tại đây nếu cần
+            if ($request->filled('search')) {
+                $search = $request->search;
+                $query->where('import_code', 'like', "%{$search}%");
+            }
+
+            // Sắp xếp
+            if ($request->has('sort_by') && $request->has('sort_dir')) {
+                // Logic sort...
+                $query->orderBy($request->sort_by, $request->sort_dir);
+            } else {
+                $query->orderBy('id', 'desc');
+            }
+
+            $imports = $query->paginate($perPage);
+            // --------------------
 
             return response()->json([
                 'success' => true,
-                'message' => 'Lấy danh sách phiếu nhập thành công',
+                'message' => 'Lấy danh sách thành công',
                 'data'    => $imports
             ]);
-
         } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Lỗi hệ thống: ' . $e->getMessage()
-            ], 500);
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
 
@@ -769,7 +791,6 @@ class ImportsController extends Controller
                 'message' => 'Tạo phiếu nhập thành công',
                 'data'    => $import
             ], 201);
-
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json([
@@ -786,8 +807,8 @@ class ImportsController extends Controller
     {
         // Eager load các quan hệ cần thiết: NCC, Người tạo, Kho, và Chi tiết sản phẩm nhập
         $import = Imports::with([
-            'provider:id,provider_name,phone,address', 
-            'user:id,name', 
+            'provider:id,provider_name,phone,address',
+            'user:id,name',
             'warehouse:id,warehouse_name',
             // Load chi tiết sản phẩm nhập kèm thông tin sản phẩm
             'productImports.product:id,product_name,product_code'
@@ -836,11 +857,11 @@ class ImportsController extends Controller
         try {
             // Cập nhật dữ liệu (chỉ cập nhật các trường được gửi lên)
             $import->update($request->only([
-                'provider_id', 
-                'date_create', 
-                'phone', 
-                'address', 
-                'note', 
+                'provider_id',
+                'date_create',
+                'phone',
+                'address',
+                'note',
                 'contact_person',
                 'warehouse_id'
             ]));
@@ -850,7 +871,6 @@ class ImportsController extends Controller
                 'message' => 'Cập nhật phiếu nhập thành công',
                 'data'    => $import
             ]);
-
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -879,7 +899,7 @@ class ImportsController extends Controller
             // Kiểm tra xem phiếu nhập đã có sản phẩm chi tiết chưa
             // Nếu có thì nên cân nhắc: Xóa chi tiết trước hay chặn xóa.
             // Ở đây tôi chọn phương án: Xóa cả chi tiết nhập (Cascade logic thủ công)
-            
+
             // 1. Xóa các dòng trong product_import liên quan (Nếu có model ProductImport)
             // $import->productImports()->delete(); 
 
@@ -892,7 +912,6 @@ class ImportsController extends Controller
                 'success' => true,
                 'message' => 'Xóa phiếu nhập thành công'
             ]);
-
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json([

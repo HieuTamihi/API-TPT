@@ -1,4 +1,5 @@
 <?php
+
 use App\Http\Controllers\ImportsController;
 use App\Http\Controllers\GroupsController;
 use App\Http\Controllers\CustomersController;
@@ -6,7 +7,66 @@ use App\Http\Controllers\ProvidersController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\WarehouseController;
+use App\Http\Controllers\ExportsController;
+use App\Http\Controllers\WarehouseTransferController;
+use App\Http\Controllers\ReturnFormController;
+use App\Http\Controllers\QuotationController;
+use App\Http\Controllers\ReceivingController;
 use Illuminate\Support\Facades\Route;
+
+// === 1. CHUYỂN KHO (Warehouse Transfer) ===
+Route::prefix('warehouse-transfer')->group(function () {
+    Route::get('/list', [WarehouseTransferController::class, 'list']);          // Danh sách
+    Route::get('/detail/{id}', [WarehouseTransferController::class, 'detail']); // Chi tiết
+    Route::post('/add', [WarehouseTransferController::class, 'add']);           // Tạo mới
+    Route::put('/change/{id}', [WarehouseTransferController::class, 'change']); // Cập nhật
+    Route::delete('/delete/{id}', [WarehouseTransferController::class, 'delete']); // Xóa
+});
+
+// === 2. PHIẾU TRẢ HÀNG (Return Form) ===
+Route::prefix('return-form')->group(function () {
+    Route::get('/list', [ReturnFormController::class, 'list']);
+    Route::get('/detail/{id}', [ReturnFormController::class, 'detail']);
+    Route::post('/add', [ReturnFormController::class, 'add']);
+    Route::put('/change/{id}', [ReturnFormController::class, 'change']);
+    Route::delete('/delete/{id}', [ReturnFormController::class, 'delete']);
+});
+
+// === 3. BÁO GIÁ (Quotations) ===
+Route::prefix('quotations')->group(function () {
+    Route::get('/list', [QuotationController::class, 'list']);
+    Route::get('/detail/{id}', [QuotationController::class, 'detail']);
+    Route::post('/add', [QuotationController::class, 'add']);
+    Route::put('/change/{id}', [QuotationController::class, 'change']);
+    Route::delete('/delete/{id}', [QuotationController::class, 'delete']);
+});
+
+// === 4. NHẬP KHO / TIẾP NHẬN (Receivings) ===
+Route::prefix('receivings')->group(function () {
+    Route::get('/list', [ReceivingController::class, 'list']);
+    Route::get('/detail/{id}', [ReceivingController::class, 'detail']);
+    Route::post('/add', [ReceivingController::class, 'add']);
+    Route::put('/change/{id}', [ReceivingController::class, 'change']);
+    Route::delete('/delete/{id}', [ReceivingController::class, 'delete']);
+});
+
+// === 5. NHẬP HÀNG (Imports) ===
+Route::prefix('imports')->group(function () {
+    Route::get('/list', [ImportsController::class, 'list']);
+    Route::get('/detail/{id}', [ImportsController::class, 'detail']);
+    Route::post('/add', [ImportsController::class, 'add']);
+    Route::put('/change/{id}', [ImportsController::class, 'change']);
+    Route::delete('/delete/{id}', [ImportsController::class, 'delete']);
+});
+
+// === 6. XUẤT HÀNG (Exports) ===
+Route::prefix('exports')->group(function () {
+    Route::get('/list', [ExportsController::class, 'list']);
+    Route::get('/detail/{id}', [ExportsController::class, 'detail']);
+    Route::post('/add', [ExportsController::class, 'add']);
+    Route::put('/change/{id}', [ExportsController::class, 'change']);
+    Route::delete('/delete/{id}', [ExportsController::class, 'delete']);
+});
 
 // === QUẢN LÝ NHÓM ĐỐI TƯỢNG (Groups) ===
 Route::prefix('groups')->group(function () {

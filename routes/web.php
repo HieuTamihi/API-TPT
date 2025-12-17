@@ -27,69 +27,6 @@ use App\Http\Middleware\CorsMiddleware;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 
-Route::prefix('warehouse-transfer')->group(function () {
-    Route::get('/list', [WarehouseTransferController::class, 'list']);
-    Route::get('detail/{id}', [WarehouseTransferController::class, 'detail']);
-    Route::post('/add', [WarehouseTransferController::class, 'add']);
-    Route::get('/detail/{id}', [WarehouseTransferController::class, 'detail']);
-    Route::put('/change/{id}', [WarehouseTransferController::class, 'change']);
-    Route::delete('/delete/{id}', [WarehouseTransferController::class, 'delete']);
-});
-
-Route::prefix('return-form')->group(function () {
-    Route::get('/list', [ReturnFormController::class, 'list']);
-    Route::get('detail/{id}', [ReturnFormController::class, 'detail']);
-    Route::post('/add', [ReturnFormController::class, 'add']);
-    Route::get('/detail/{id}', [ReturnFormController::class, 'detail']);
-    Route::put('/change/{id}', [ReturnFormController::class, 'change']);
-    Route::delete('/delete/{id}', [ReturnFormController::class, 'delete']);
-});
-
-Route::prefix('quotations')->group(function () {
-    Route::get('/list', [QuotationController::class, 'list']);
-    Route::get('detail/{id}', [QuotationController::class, 'detail']);
-    Route::post('/add', [QuotationController::class, 'add']);
-    Route::get('/detail/{id}', [QuotationController::class, 'detail']);
-    Route::put('/change/{id}', [QuotationController::class, 'change']);
-    Route::delete('/delete/{id}', [QuotationController::class, 'delete']);
-});
-
-Route::prefix('receivings')->group(function () {
-    Route::get('/list', [ReceivingController::class, 'list']);
-    Route::get('detail/{id}', [ReceivingController::class, 'detail']);
-    Route::post('/add', [ReceivingController::class, 'add']);
-    Route::get('/detail/{id}', [ReceivingController::class, 'detail']);
-    Route::put('/change/{id}', [ReceivingController::class, 'change']);
-    Route::delete('/delete/{id}', [ReceivingController::class, 'delete']);
-});
-
-// Group route cho Imports
-Route::prefix('imports')->group(function () {
-    Route::get('/list', [ImportsController::class, 'list']);           // API Danh sách
-    Route::post('/add', [ImportsController::class, 'add']);             // API Tạo mới
-    Route::get('/detail/{id}', [ImportsController::class, 'detail']);   // API Xem chi tiết
-    Route::put('/change/{id}', [ImportsController::class, 'change']);   // API Cập nhật
-    Route::delete('/delete/{id}', [ImportsController::class, 'delete']); // API Xóa
-});
-
-Route::prefix('exports')->group(function () {
-
-    // Lấy danh sách (GET /api/exports?page=1&search=...)
-    Route::get('/list', [ExportsController::class, 'list']);
-
-    // Tạo mới (POST /api/exports)
-    Route::post('/add', [ExportsController::class, 'add']);
-
-    // Xem chi tiết (GET /api/exports/{id})
-    Route::get('/detail/{id}', [ExportsController::class, 'detail']);
-
-    // Cập nhật (PUT/PATCH /api/exports/{id})
-    Route::put('/change/{id}', [ExportsController::class, 'change']);
-
-    // Xóa (DELETE /api/exports/{id})
-    Route::delete('/delete/{id}', [ExportsController::class, 'delete']);
-});
-
 // Database Management Routes (Admin only)
 Route::group(['middleware' => ['permission:admin']], function () {
     Route::prefix('database')->group(function () {
