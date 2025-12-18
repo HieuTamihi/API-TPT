@@ -12,7 +12,103 @@ use App\Http\Controllers\WarehouseTransferController;
 use App\Http\Controllers\ReturnFormController;
 use App\Http\Controllers\QuotationController;
 use App\Http\Controllers\ReceivingController;
+use App\Http\Controllers\InventoryLookupController;
+use App\Http\Controllers\WarrantyLookupController;
 use Illuminate\Support\Facades\Route;
+
+// === Quản Lý CHUYỂN KHO (Warehouse Transfers) ===
+Route::prefix('warehouse-transfers')->group(function () {
+    // 1. Lấy danh sách (kèm lọc, tìm kiếm)
+    Route::get('/list', [WarehouseTransferController::class, 'list']);
+    
+    // 2. Chi tiết
+    Route::get('/detail/{id}', [WarehouseTransferController::class, 'detail']);
+    
+    // 3. Tạo mới
+    Route::post('/add', [WarehouseTransferController::class, 'add']);
+    
+    // 4. Cập nhật thông tin
+    Route::put('/change/{id}', [WarehouseTransferController::class, 'change']);
+    
+    // 5. Xóa phiếu chuyển kho
+    Route::delete('/delete/{id}', [WarehouseTransferController::class, 'delete']);
+});
+
+// === Quản Lý TRẢ HÀNG (Return Forms) ===
+Route::prefix('return-forms')->group(function () {
+    // 1. Lấy danh sách (kèm lọc, tìm kiếm)
+    Route::get('/list', [ReturnFormController::class, 'list']);
+    
+    // 2. Chi tiết
+    Route::get('/detail/{id}', [ReturnFormController::class, 'detail']);
+    
+    // 3. Tạo mới
+    Route::post('/add', [ReturnFormController::class, 'add']);
+    
+    // 4. Cập nhật thông tin
+    Route::put('/change/{id}', [ReturnFormController::class, 'change']);
+    
+    // 5. Xóa phiếu trả hàng
+    Route::delete('/delete/{id}', [ReturnFormController::class, 'delete']);
+});
+
+// === Quản Lý BÁO GIÁ (Quotations) ===
+Route::prefix('quotations')->group(function () {
+    // 1. Lấy danh sách (kèm lọc, tìm kiếm)
+    Route::get('/list', [QuotationController::class, 'list']);
+    
+    // 2. Chi tiết
+    Route::get('/detail/{id}', [QuotationController::class, 'detail']);
+    
+    // 3. Tạo mới
+    Route::post('/add', [QuotationController::class, 'add']);
+    
+    // 4. Cập nhật thông tin
+    Route::put('/change/{id}', [QuotationController::class, 'change']);
+    
+    // 5. Xóa báo giá
+    Route::delete('/delete/{id}', [QuotationController::class, 'delete']);
+});
+
+// === QUẢN LÝ TIẾP NHẬN (Receivings) ===
+Route::prefix('receivings')->group(function () {
+    // 1. Lấy danh sách (kèm lọc, tìm kiếm)
+    Route::get('/list', [ReceivingController::class, 'list']);
+    
+    // 2. Chi tiết
+    Route::get('/detail/{id}', [ReceivingController::class, 'detail']);
+    
+    // 3. Tạo mới
+    Route::post('/add', [ReceivingController::class, 'add']);
+    
+    // 4. Cập nhật thông tin
+    Route::put('/change/{id}', [ReceivingController::class, 'change']);
+    
+    // 5. Xóa phiếu
+    Route::delete('/delete/{id}', [ReceivingController::class, 'delete']);
+
+    // 6. Cập nhật trạng thái nhanh (Dùng cho Modal tác vụ)
+    Route::post('/update-status', [ReceivingController::class, 'updateStatus']);
+});
+
+// === QUẢN LÝ BẢO HÀNH (Warranty Lookup) ===
+Route::prefix('warranty')->group(function () {
+    Route::get('/', [WarrantyLookupController::class, 'list']);                    // Danh sách + lọc
+    Route::get('/customers', [WarrantyLookupController::class, 'customers']);      // Dropdown khách hàng
+    Route::get('/{serial_id}', [WarrantyLookupController::class, 'detail']);       // Chi tiết theo S/N
+    Route::post('/', [WarrantyLookupController::class, 'add']);                  // Tạo mới
+    Route::put('/{id}', [WarrantyLookupController::class, 'change']);              // Cập nhật
+    Route::delete('/{id}', [WarrantyLookupController::class, 'delete']);           // Xóa
+});
+
+
+// === TRA CỨU TỒN KHO (Inventory Lookup) ===
+Route::prefix('inventory')->group(function () {
+    Route::get('/', [InventoryLookupController::class, 'list']);           // Danh sách tồn kho + lọc
+    Route::get('/check', [InventoryLookupController::class, 'checkStock']); // Dropdown sản phẩm
+    Route::get('/providers', [InventoryLookupController::class, 'providers']); // Dropdown NCC
+    Route::get('/warehouses', [InventoryLookupController::class, 'warehouses']); // Dropdown kho
+});
 
 // === 1. CHUYỂN KHO (Warehouse Transfer) ===
 Route::prefix('warehouse-transfer')->group(function () {

@@ -7,6 +7,9 @@ use App\Models\InventoryHistory;
 use App\Models\InventoryLookup;
 use App\Models\Product;
 use App\Models\Providers;
+use App\Models\Warehouse;
+use Carbon\Carbon;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -426,6 +429,224 @@ class InventoryLookupController extends Controller
             'search_keyword' => $keyword,
             'total_products_found' => $result->count(),
             'data' => $result
+        ]);
+    }
+
+    /**
+     * Danh sách tồn kho + tìm kiếm + lọc + sắp xếp + phân trang
+     * Tương tự method getInvenAjax trong model
+     */
+    public function list(Request $request): JsonResponse
+    {
+        $inputData = [];
+
+        // Lấy tham số request ...
+        // (Giữ nguyên phần xử lý input của bạn ở trên: provider, status, dates...)
+        if ($request->filled('search')) $inputData['search'] = $request->search;
+        if ($request->filled('ma')) $inputData['ma'] = $request->ma;
+        if ($request->filled('ten')) $inputData['ten'] = $request->ten;
+        if ($request->filled('brand')) $inputData['brand'] = $request->brand;
+        if ($request->filled('sn')) $inputData['sn'] = $request->sn;
+        if ($request->filled('provider')) $inputData['provider'] = (array)$request->provider; // Fix lỗi count()
+        if ($request->filled('status')) $inputData['status'] = (array)$request->status; // Fix lỗi count()
+        if ($request->filled('date_from')) $inputData['date'] = [$request->date_from, $request->date_to];
+        if ($request->filled('duration_min')) $inputData['time_inven'] = [$request->duration_min, $request->duration_max];
+
+        // Sắp xếp
+        if ($request->has('sort_by') && $request->has('sort_dir')) {
+            $sortMap = [
+                'code' => 'products.product_code',
+                'name' => 'products.product_name',
+                'brand' => 'products.brand',
+                'serial' => 'serial_numbers.serial_code',
+                'provider' => 'providers.provider_name',
+                'import_date' => 'inventory_lookup.import_date',
+                'warehouse' => 'warehouses.warehouse_name',
+                'duration' => 'inventory_lookup.storage_duration',
+            ];
+            $field = $sortMap[$request->sort_by] ?? 'inventory_lookup.id';
+            $inputData['sort'] = [$field, $request->sort_dir];
+        }
+
+        // --- BẮT ĐẦU SỬA QUERY TẠI ĐÂY ---
+
+        $query = InventoryLookup::select(
+            'inventory_lookup.*',
+            'products.product_code',
+            'products.product_name',
+            'products.brand',
+            'providers.provider_name',
+            'warehouses.warehouse_name',
+            // Sử dụng leftJoin nên cần xử lý null cho serial
+            DB::raw('IFNULL(serial_numbers.serial_code, "") as serial_code'),
+            DB::raw('IFNULL(serial_numbers.status, 0) as serial_status')
+        )
+            ->join('products', 'products.id', '=', 'inventory_lookup.product_id')
+            ->join('providers', 'providers.id', '=', 'inventory_lookup.provider_id')
+            ->leftJoin('warehouses', 'warehouses.id', '=', 'inventory_lookup.warehouse_id')
+            // QUAN TRỌNG: Đổi thành LEFT JOIN để lấy cả hàng không có serial (sn_id=0)
+            ->leftJoin('serial_numbers', 'serial_numbers.id', '=', 'inventory_lookup.sn_id');
+
+        // QUAN TRỌNG: Điều kiện lọc (Tương tự logic trong hàm index của Web)
+        $query->where(function ($q) {
+            // Trường hợp 1: Có Serial (sn_id > 0) -> Phải check status trong bảng serial
+            $q->where(function ($sub) {
+                $sub->where('inventory_lookup.sn_id', '>', 0)
+                    ->whereIn('serial_numbers.status', [1, 5]); // 1: Trong kho, 5: Đang mượn
+            })
+                // Trường hợp 2: Không có Serial (sn_id = 0) -> Check số lượng tồn > 0
+                ->orWhere(function ($sub) {
+                    $sub->where('inventory_lookup.sn_id', 0)
+                        ->where('inventory_lookup.remaining_quantity', '>', 0);
+                });
+        });
+
+        // === PHÂN QUYỀN THEO KHO ===
+        $user = Auth::user();
+        if ($user) {
+            $isAdminOrManager = $user->hasAnyRole(['Quản lý kho']) || ($user->roles && $user->roles->id == 1);
+
+            if (!$isAdminOrManager) {
+                $warehouseId = \App\Helpers\GlobalHelper::getWarehouseId();
+                if ($warehouseId) {
+                    // Logic phân quyền: Nếu có serial check theo serial, không thì check theo inventory
+                    $query->where(function ($q) use ($warehouseId) {
+                        $q->where('serial_numbers.warehouse_id', $warehouseId)
+                            ->orWhere('inventory_lookup.warehouse_id', $warehouseId);
+                    });
+                }
+            }
+        }
+
+        // --- CÁC BỘ LỌC TÌM KIẾM ---
+
+        // 1. Tìm kiếm chung
+        if (!empty($inputData['search'])) {
+            $search = $inputData['search'];
+            $query->where(function ($q) use ($search) {
+                $q->where('products.product_code', 'like', "%{$search}%")
+                    ->orWhere('products.product_name', 'like', "%{$search}%")
+                    ->orWhere('products.brand', 'like', "%{$search}%")
+                    ->orWhere('providers.provider_name', 'like', "%{$search}%")
+                    ->orWhere('serial_numbers.serial_code', 'like', "%{$search}%");
+            });
+        }
+
+        // 2. Lọc chi tiết
+        if (!empty($inputData['ma'])) $query->where('products.product_code', 'like', "%{$inputData['ma']}%");
+        if (!empty($inputData['ten'])) $query->where('products.product_name', 'like', "%{$inputData['ten']}%");
+        if (!empty($inputData['brand'])) $query->where('products.brand', 'like', "%{$inputData['brand']}%");
+        if (!empty($inputData['sn'])) $query->where('serial_numbers.serial_code', 'like', "%{$inputData['sn']}%");
+
+        // 3. Lọc nhà cung cấp
+        if (!empty($inputData['provider'])) {
+            $query->whereIn('inventory_lookup.provider_id', $inputData['provider']);
+        }
+
+        // 4. Lọc trạng thái (Chỉ áp dụng chính xác cho hàng có serial)
+        if (!empty($inputData['status'])) {
+            // Nếu lọc trạng thái, ta ưu tiên check bảng serial. 
+            // Nếu hàng không serial, mặc định coi là trạng thái '0' (hoặc logic riêng của bạn)
+            $query->where(function ($q) use ($inputData) {
+                $q->whereIn('serial_numbers.status', $inputData['status'])
+                    ->orWhereIn('inventory_lookup.status', $inputData['status']);
+            });
+        }
+
+        // 5. Lọc ngày và thời gian
+        if (!empty($inputData['date'][0])) {
+            $start = Carbon::parse($inputData['date'][0])->startOfDay();
+            $end = Carbon::parse($inputData['date'][1])->endOfDay();
+            $query->whereBetween('inventory_lookup.import_date', [$start, $end]);
+        }
+        if (isset($inputData['time_inven'])) {
+            $query->whereBetween('inventory_lookup.storage_duration', $inputData['time_inven']);
+        }
+
+        // Sắp xếp
+        if (isset($inputData['sort'])) {
+            $query->orderBy($inputData['sort'][0], $inputData['sort'][1]);
+        } else {
+            $query->orderBy('inventory_lookup.id', 'desc');
+        }
+
+        // Phân trang
+        $perPage = $request->get('per_page', 25);
+        $inventory = $query->paginate($perPage);
+
+        // Format dữ liệu
+        $data = $inventory->getCollection()->map(function ($item) {
+            return [
+                'id' => $item->id,
+                'code' => $item->product_code,
+                'name' => $item->product_name,
+                'brand' => $item->brand,
+                'serial' => $item->serial_code ?: '--', // Nếu không có serial thì hiện --
+                'provider' => $item->provider_name,
+                'import_date' => $item->import_date ? Carbon::parse($item->import_date)->format('d/m/Y') : '',
+                'warehouse' => $item->warehouse_name,
+                'duration' => $item->storage_duration . ' ngày',
+                'status' => $this->getStatusText($item->serial_status ?: $item->status, $item->warranty_date),
+                'quantity' => $item->remaining_quantity // Thêm số lượng tồn để hiển thị
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => $data,
+            'pagination' => [
+                'current_page' => $inventory->currentPage(),
+                'last_page' => $inventory->lastPage(),
+                'per_page' => $inventory->perPage(),
+                'total' => $inventory->total(),
+            ]
+        ]);
+    }
+
+    // Hàm hỗ trợ hiển thị trạng thái (có thể điều chỉnh theo nghiệp vụ)
+    private function getStatusText($status, $warrantyDate)
+    {
+        // Ví dụ: nếu hết hạn bảo hành → "Tới hạn bảo trì"
+        if ($warrantyDate && Carbon::parse($warrantyDate)->isPast()) {
+            return 'Tới hạn bảo trì';
+        }
+
+        $statusMap = [
+            1 => 'Trong kho',
+            5 => 'Đang mượn',
+            // thêm các trạng thái khác nếu cần
+        ];
+
+        return $statusMap[$status] ?? '';
+    }
+
+    /**
+     * Lấy danh sách nhà cung cấp để filter
+     */
+    public function providers(): JsonResponse
+    {
+        $providers = Providers::select('id', 'provider_name')
+            ->orderBy('provider_name')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $providers
+        ]);
+    }
+
+    /**
+     * Lấy danh sách kho (nếu cần filter theo kho)
+     */
+    public function warehouses(): JsonResponse
+    {
+        $warehouses = Warehouse::select('id', 'warehouse_name', 'warehouse_code')
+            ->orderBy('warehouse_name')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $warehouses
         ]);
     }
 }

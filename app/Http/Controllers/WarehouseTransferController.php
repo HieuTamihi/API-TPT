@@ -260,23 +260,22 @@ class WarehouseTransferController extends Controller
      */
     public function list(Request $request)
     {
-        $query = WarehouseTransfer::query();
-
+        $query = WarehouseTransfer::with(['fromWarehouse', 'toWarehouse', 'user']);
         // Eager load relationships để tránh N+1 query (nếu có model Warehouse và User)
         // $query->with(['user', 'fromWarehouse', 'toWarehouse']);
 
         // Tìm kiếm theo mã phiếu
-        if ($request->has('code')) {
+        if ($request->filled('code')) {
             $query->where('code', 'like', '%' . $request->code . '%');
         }
 
         // Lọc theo trạng thái
-        if ($request->has('status')) {
+        if ($request->filled('status')) {
             $query->where('status', $request->status);
         }
 
         // Lọc theo ngày
-        if ($request->has('from_date') && $request->has('to_date')) {
+        if ($request->filled('from_date') && $request->filled('to_date')) {
             $query->whereBetween('transfer_date', [$request->from_date, $request->to_date]);
         }
 
