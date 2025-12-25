@@ -13,23 +13,42 @@ use App\Http\Controllers\ReturnFormController;
 use App\Http\Controllers\QuotationController;
 use App\Http\Controllers\ReceivingController;
 use App\Http\Controllers\InventoryLookupController;
+use App\Http\Controllers\ReportController;
 use App\Http\Controllers\WarrantyLookupController;
 use Illuminate\Support\Facades\Route;
+
+Route::prefix('reports')->group(function () {
+    // 1. Tổng quát
+    Route::get('/overview', [ReportController::class, 'reportOverviewApp']);
+    Route::get('/filter-period', [ReportController::class, 'filterReportPeriodTime']); // API lọc thời gian tổng quát
+
+    // 2. Xuất nhập
+    Route::get('/export-import', [ReportController::class, 'reportExportImportApp']);
+    Route::get('/filter-export-import', [ReportController::class, 'filterExportImport']);
+
+    // 3. Tiếp nhận - Trả hàng
+    Route::get('/receipt-return', [ReportController::class, 'reportReceiptReturnApp']);
+    Route::get('/filter-receipt-return', [ReportController::class, 'filterReceiptReturn']);
+
+    // 4. Báo giá
+    Route::get('/quotation', [ReportController::class, 'reportQuotationApp']);
+    Route::get('/filter-quotation', [ReportController::class, 'filterQuotation']);
+});
 
 // === Quản Lý CHUYỂN KHO (Warehouse Transfers) ===
 Route::prefix('warehouse-transfers')->group(function () {
     // 1. Lấy danh sách (kèm lọc, tìm kiếm)
     Route::get('/list', [WarehouseTransferController::class, 'list']);
-    
+
     // 2. Chi tiết
     Route::get('/detail/{id}', [WarehouseTransferController::class, 'detail']);
-    
+
     // 3. Tạo mới
     Route::post('/add', [WarehouseTransferController::class, 'add']);
-    
+
     // 4. Cập nhật thông tin
     Route::put('/change/{id}', [WarehouseTransferController::class, 'change']);
-    
+
     // 5. Xóa phiếu chuyển kho
     Route::delete('/delete/{id}', [WarehouseTransferController::class, 'delete']);
 });
@@ -38,16 +57,16 @@ Route::prefix('warehouse-transfers')->group(function () {
 Route::prefix('return-forms')->group(function () {
     // 1. Lấy danh sách (kèm lọc, tìm kiếm)
     Route::get('/list', [ReturnFormController::class, 'list']);
-    
+
     // 2. Chi tiết
     Route::get('/detail/{id}', [ReturnFormController::class, 'detail']);
-    
+
     // 3. Tạo mới
     Route::post('/add', [ReturnFormController::class, 'add']);
-    
+
     // 4. Cập nhật thông tin
     Route::put('/change/{id}', [ReturnFormController::class, 'change']);
-    
+
     // 5. Xóa phiếu trả hàng
     Route::delete('/delete/{id}', [ReturnFormController::class, 'delete']);
 });
@@ -56,16 +75,16 @@ Route::prefix('return-forms')->group(function () {
 Route::prefix('quotations')->group(function () {
     // 1. Lấy danh sách (kèm lọc, tìm kiếm)
     Route::get('/list', [QuotationController::class, 'list']);
-    
+
     // 2. Chi tiết
     Route::get('/detail/{id}', [QuotationController::class, 'detail']);
-    
+
     // 3. Tạo mới
     Route::post('/add', [QuotationController::class, 'add']);
-    
+
     // 4. Cập nhật thông tin
     Route::put('/change/{id}', [QuotationController::class, 'change']);
-    
+
     // 5. Xóa báo giá
     Route::delete('/delete/{id}', [QuotationController::class, 'delete']);
 });
@@ -74,16 +93,16 @@ Route::prefix('quotations')->group(function () {
 Route::prefix('receivings')->group(function () {
     // 1. Lấy danh sách (kèm lọc, tìm kiếm)
     Route::get('/list', [ReceivingController::class, 'list']);
-    
+
     // 2. Chi tiết
     Route::get('/detail/{id}', [ReceivingController::class, 'detail']);
-    
+
     // 3. Tạo mới
     Route::post('/add', [ReceivingController::class, 'add']);
-    
+
     // 4. Cập nhật thông tin
     Route::put('/change/{id}', [ReceivingController::class, 'change']);
-    
+
     // 5. Xóa phiếu
     Route::delete('/delete/{id}', [ReceivingController::class, 'delete']);
 
