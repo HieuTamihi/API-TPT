@@ -13,6 +13,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Validator;
 
 class GroupsController extends Controller
 {
@@ -244,30 +245,24 @@ class GroupsController extends Controller
 
     // API vũ viết
     /**
-     * Danh sách loại nhóm (dùng cho filter hoặc dropdown nếu cần)
+     * API: Danh sách Loại nhóm (Dropdown)
      */
     public function types(): JsonResponse
     {
-        $types = GroupTypeMain::select('id', 'group_name as name')
-            ->orderBy('id')
-            ->get();
-
-        return response()->json([
-            'success' => true,
-            'data' => $types
-        ]);
+        // Lấy từ bảng group_types
+        $types = DB::table('group_types')->select('id', 'group_name')->get();
+        return response()->json(['success' => true, 'data' => $types]);
     }
 
     /**
-     * Danh sách nhóm đối tượng (phân trang + tìm kiếm + sắp xếp)
+     * API: Danh sách Nhóm (List)
      */
     public function list(Request $request): JsonResponse
     {
-        // Khởi tạo query
-        $query = Groups::with('grouptype:id,group_name');
+        $query = Groups::with('type'); // Eager load loại nhóm
 
-        // Tìm kiếm
-        if ($request->has('search') && $request->search !== '') {
+        // 1. Tìm kiếm chung
+        if ($request->filled('search')) {
             $search = $request->search;
             $query->where(function ($q) use ($search) {
                 $q->where('group_code', 'like', "%{$search}%")
@@ -275,45 +270,35 @@ class GroupsController extends Controller
             });
         }
 
-        // Lọc theo loại nhóm
-        if ($request->has('type_id') && $request->type_id > 0) {
-            $query->where('group_type_id', $request->type_id);
-        }
+        // 2. Lọc chi tiết
+        if ($request->filled('code')) $query->where('group_code', 'like', "%{$request->code}%");
+        if ($request->filled('name')) $query->where('group_name', 'like', "%{$request->name}%");
+        if ($request->filled('type_id')) $query->where('group_type_id', $request->type_id);
 
-        // Xử lý Sắp xếp
-        $sortBy = $request->get('sort_by', 'id');
-        $sortDir = $request->get('sort_dir', 'asc');
+        // 3. Sắp xếp
+        if ($request->has('sort_by') && $request->has('sort_dir')) {
+            $sortBy = $request->sort_by;
+            if ($sortBy === 'code') $sortBy = 'group_code';
+            if ($sortBy === 'name') $sortBy = 'group_name';
 
-        if ($sortBy === 'code') {
-            $query->orderBy('group_code', $sortDir);
-        } elseif ($sortBy === 'name') {
-            $query->orderBy('group_name', $sortDir);
-        } elseif ($sortBy === 'type') {
-            // Join để sort nhưng không select đè lên các cột khác
-            $query->join('group_types', 'groups.group_type_id', '=', 'group_types.id')
-                ->orderBy('group_types.group_name', $sortDir)
-                // Quan trọng: Phải select lại các cột của groups để tránh mất dữ liệu model
-                ->select('groups.*');
+            $query->orderBy($sortBy, $request->sort_dir);
         } else {
-            $query->orderBy('groups.id', $sortDir);
+            $query->orderBy('id', 'desc');
         }
 
-        // Phân trang
+        // 4. Phân trang
         $perPage = $request->get('per_page', 20);
         $groups = $query->paginate($perPage);
 
-        // Map dữ liệu trả về
-        $data = $groups->getCollection()->map(function ($group) {
+        // Map dữ liệu để frontend dễ dùng (lấy tên loại nhóm ra ngoài)
+        $data = collect($groups->items())->map(function ($g) {
             return [
-                'id' => $group->id,
-                'code' => $group->group_code, // Lấy thẳng tên cột trong DB cho chắc chắn
-                'name' => $group->group_name, // Lấy thẳng tên cột trong DB
-
-                // --- SỬA LỖI TẠI ĐÂY ---
-                // Gọi đúng tên function trong Model là grouptype
-                'type' => $group->grouptype ? $group->grouptype->group_name : 'Chưa xác định',
-
-                'description' => $group->description,
+                'id' => $g->id,
+                'group_code' => $g->group_code,
+                'group_name' => $g->group_name,
+                'description' => $g->description,
+                'group_type_id' => $g->group_type_id,
+                'type_name' => $g->type ? $g->type->group_name : '---'
             ];
         });
 
@@ -323,97 +308,80 @@ class GroupsController extends Controller
             'pagination' => [
                 'current_page' => $groups->currentPage(),
                 'last_page' => $groups->lastPage(),
-                'per_page' => $groups->perPage(),
                 'total' => $groups->total(),
             ]
         ]);
     }
 
     /**
-     * Lấy chi tiết 1 nhóm
-     */
-    public function detail($id): JsonResponse
-    {
-        $group = Groups::with('grouptype')->findOrFail($id);
-
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'id' => $group->id,
-                'code' => $group->group_code,
-                'name' => $group->group_name,
-                'type_id' => $group->group_type_id,
-                'type' => $group->type->group_name ?? '',
-                'description' => $group->description,
-            ]
-        ]);
-    }
-
-    /**
-     * Tạo mới nhóm
+     * API: Thêm mới
      */
     public function add(Request $request): JsonResponse
     {
-        $request->validate([
+        $validator = Validator::make($request->all(), [
             'group_type_id' => 'required|exists:group_types,id',
-            'group_code' => 'required|string|max:255|unique:groups,group_code',
+            'group_code' => 'required|string|max:50|unique:groups,group_code',
             'group_name' => 'required|string|max:255',
             'description' => 'nullable|string',
         ]);
 
-        $group = Groups::create($request->only([
-            'group_type_id',
-            'group_code',
-            'group_name',
-            'description'
-        ]));
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'message' => 'Dữ liệu không hợp lệ', 'errors' => $validator->errors()], 422);
+        }
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Tạo nhóm thành công',
-            'data' => $group->load('type')
-        ], 201);
+        try {
+            $group = Groups::create($request->all());
+            return response()->json(['success' => true, 'message' => 'Tạo nhóm thành công', 'data' => $group], 201);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
     }
 
     /**
-     * Cập nhật nhóm
+     * API: Cập nhật
      */
     public function change(Request $request, $id): JsonResponse
     {
-        $group = Groups::findOrFail($id);
+        $group = Groups::find($id);
+        if (!$group) return response()->json(['success' => false, 'message' => 'Không tìm thấy nhóm'], 404);
 
-        $request->validate([
+        $validator = Validator::make($request->all(), [
             'group_type_id' => 'required|exists:group_types,id',
-            'group_code' => 'required|string|max:255|unique:groups,group_code,' . $id,
+            'group_code' => 'required|string|max:50|unique:groups,group_code,' . $id,
             'group_name' => 'required|string|max:255',
             'description' => 'nullable|string',
         ]);
 
-        $group->update($request->only([
-            'group_type_id',
-            'group_code',
-            'group_name',
-            'description'
-        ]));
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'message' => 'Dữ liệu không hợp lệ', 'errors' => $validator->errors()], 422);
+        }
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Cập nhật thành công',
-            'data' => $group->load('type')
-        ]);
+        $group->update($request->all());
+        return response()->json(['success' => true, 'message' => 'Cập nhật thành công', 'data' => $group]);
     }
 
     /**
-     * Xóa nhóm
+     * API: Xóa (Có kiểm tra ràng buộc)
      */
     public function delete($id): JsonResponse
     {
-        $group = Groups::findOrFail($id);
-        $group->delete();
+        $group = Groups::find($id);
+        if (!$group) return response()->json(['success' => false, 'message' => 'Không tìm thấy nhóm'], 404);
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Xóa nhóm thành công'
-        ]);
+        // Kiểm tra ràng buộc ở 4 bảng con
+        $hasCustomers = DB::table('customers')->where('group_id', $id)->exists();
+        $hasProviders = DB::table('providers')->where('group_id', $id)->exists();
+        $hasProducts  = DB::table('products')->where('group_id', $id)->exists();
+        $hasUsers     = DB::table('users')->where('group_id', $id)->exists();
+
+        if ($hasCustomers || $hasProviders || $hasProducts || $hasUsers) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Không thể xóa nhóm này vì đang được sử dụng bởi Khách hàng, NCC, Hàng hóa hoặc Nhân viên.'
+            ], 422);
+        }
+
+        $group->delete();
+        return response()->json(['success' => true, 'message' => 'Xóa nhóm thành công']);
     }
 }

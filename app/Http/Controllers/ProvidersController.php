@@ -9,6 +9,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Maatwebsite\Excel\Facades\Excel;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Validator;
 
 class ProvidersController extends Controller
 {
@@ -196,239 +197,128 @@ class ProvidersController extends Controller
     }
 
     /**
-     * Danh sách nhà cung cấp + tìm kiếm + lọc + sắp xếp + phân trang
+     * API: Danh sách NCC
      */
     public function list(Request $request): JsonResponse
     {
-        $inputData = [];
+        $query = Providers::with('group');
 
-        // Tìm kiếm chung
+        // 1. Tìm kiếm chung
         if ($request->filled('search')) {
-            $inputData['search'] = $request->search;
-        }
-
-        // Bộ lọc chi tiết từ modal
-        if ($request->filled('ma')) $inputData['ma'] = $request->ma;
-        if ($request->filled('ten')) $inputData['ten'] = $request->ten;
-        if ($request->filled('address')) $inputData['address'] = $request->address;
-        if ($request->filled('phone')) $inputData['phone'] = $request->phone;
-        if ($request->filled('email')) $inputData['email'] = $request->email;
-        if ($request->filled('note')) $inputData['note'] = $request->note;
-
-        // Sắp xếp
-        if ($request->has('sort_by') && $request->has('sort_dir')) {
-            $sortMap = [
-                'code'    => 'provider_code',
-                'name'    => 'provider_name',
-                'address' => 'address',
-                'phone'   => 'phone',
-                'email'   => 'email',
-                'note'    => 'note',
-            ];
-            $field = $sortMap[$request->sort_by] ?? 'id';
-            $inputData['sort'] = [$field, $request->sort_dir];
-        }
-
-        // Xây dựng query giống logic trong getAllProvide
-        $query = DB::table('providers');
-
-        if (!empty($inputData['search'])) {
-            $search = $inputData['search'];
+            $search = $request->search;
             $query->where(function ($q) use ($search) {
                 $q->where('provider_code', 'like', "%{$search}%")
                     ->orWhere('provider_name', 'like', "%{$search}%")
-                    ->orWhere('address', 'like', "%{$search}%")
                     ->orWhere('phone', 'like', "%{$search}%")
-                    ->orWhere('email', 'like', "%{$search}%")
-                    ->orWhere('note', 'like', "%{$search}%");
+                    ->orWhere('email', 'like', "%{$search}%");
             });
         }
 
-        $filterable = [
-            'ma'      => 'provider_code',
-            'ten'     => 'provider_name',
-            'address' => 'address',
-            'phone'   => 'phone',
-            'email'   => 'email',
-            'note'    => 'note',
-        ];
+        // 2. Lọc chi tiết
+        if ($request->filled('ma')) $query->where('provider_code', 'like', "%{$request->ma}%");
+        if ($request->filled('ten')) $query->where('provider_name', 'like', "%{$request->ten}%");
+        if ($request->filled('phone')) $query->where('phone', 'like', "%{$request->phone}%");
+        if ($request->filled('group_id')) $query->where('group_id', $request->group_id);
 
-        foreach ($filterable as $key => $field) {
-            if (!empty($inputData[$key])) {
-                $query->where($field, 'like', "%{$inputData[$key]}%");
-            }
-        }
-
-        if (isset($inputData['sort'])) {
-            $query->orderBy($inputData['sort'][0], $inputData['sort'][1]);
+        // 3. Sắp xếp
+        if ($request->has('sort_by') && $request->has('sort_dir')) {
+            $sortBy = $request->sort_by;
+            if ($sortBy === 'code') $sortBy = 'provider_code';
+            if ($sortBy === 'name') $sortBy = 'provider_name';
+            $query->orderBy($sortBy, $request->sort_dir);
         } else {
             $query->orderBy('id', 'desc');
         }
 
-        // Phân trang
+        // 4. Phân trang
         $perPage = $request->get('per_page', 20);
         $providers = $query->paginate($perPage);
 
-        // Format dữ liệu trả về giống frontend
-        $data = collect($providers->items())->map(function ($item) {
-            return [
-                'id'             => $item->id,
-                'code'           => $item->provider_code,
-                'name'           => $item->provider_name,
-                'address'        => $item->address ?? '',
-                'contact_person' => $item->contact_person ?? '',
-                'phone'          => $item->phone ?? '',
-                'email'          => $item->email ?? '',
-                'tax_code'       => $item->tax_code ?? '',
-                'note'           => $item->note ?? '',
-                'group_id'       => $item->group_id,
-            ];
-        });
-
         return response()->json([
             'success' => true,
-            'data'    => $data,
+            'data' => $providers->items(),
             'pagination' => [
                 'current_page' => $providers->currentPage(),
-                'last_page'    => $providers->lastPage(),
-                'per_page'     => $providers->perPage(),
-                'total'        => $providers->total(),
+                'last_page' => $providers->lastPage(),
+                'per_page' => $providers->perPage(),
+                'total' => $providers->total(),
             ]
         ]);
     }
 
     /**
-     * Tạo mới nhà cung cấp
+     * API: Thêm mới NCC
      */
     public function add(Request $request): JsonResponse
     {
-        $request->validate([
-            'provider_code'   => 'required|string|max:255',
-            'provider_name'   => 'required|string|max:255',
-            'category_id'     => 'nullable|integer|exists:groups,id', // group_id
-            'address'         => 'nullable|string',
-            'contact_person'  => 'nullable|string',
-            'phone'           => 'nullable|string',
-            'email'           => 'nullable|email',
-            'tax_code'        => 'nullable|string',
-            'note'            => 'nullable|string',
+        $validator = Validator::make($request->all(), [
+            'provider_code' => 'required|string|max:50|unique:providers,provider_code',
+            'provider_name' => 'required|string|max:255',
+            'phone' => 'nullable|string|max:20',
+            'email' => 'nullable|email|max:255',
+            'group_id' => 'nullable|integer|exists:groups,id',
         ]);
 
-        $data = $request->all();
-        $data['category_id'] = $data['category_id'] ?? 0;
-
-        $result = $this->providers->addProvide($data);
-
-        if ($result['status'] ?? false) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Mã nhà cung cấp hoặc Tên nhà cung cấp đã tồn tại!'
-            ], 422);
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'message' => 'Dữ liệu không hợp lệ', 'errors' => $validator->errors()], 422);
         }
 
-        // Lấy bản ghi mới tạo
-        $newProvider = $this->providers->find($result['id'] ?? null);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Tạo nhà cung cấp thành công',
-            'data'    => $newProvider
-        ], 201);
+        try {
+            $provider = Providers::create($request->all());
+            return response()->json(['success' => true, 'message' => 'Thêm nhà cung cấp thành công', 'data' => $provider], 201);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => 'Lỗi: ' . $e->getMessage()], 500);
+        }
     }
 
     /**
-     * Cập nhật nhà cung cấp
+     * API: Cập nhật NCC
      */
     public function change(Request $request, $id): JsonResponse
     {
-        $request->validate([
-            'provider_code'   => 'required|string|max:255',
-            'provider_name'   => 'required|string|max:255',
-            'category_id'     => 'nullable|integer|exists:groups,id',
-            'address'         => 'nullable|string',
-            'contact_person'  => 'nullable|string',
-            'phone'           => 'nullable|string',
-            'email'           => 'nullable|email',
-            'tax_code'        => 'nullable|string',
-            'note'            => 'nullable|string',
+        $provider = Providers::find($id);
+        if (!$provider) return response()->json(['success' => false, 'message' => 'Không tìm thấy NCC'], 404);
+
+        $validator = Validator::make($request->all(), [
+            'provider_code' => 'required|string|max:50|unique:providers,provider_code,' . $id,
+            'provider_name' => 'required|string|max:255',
+            'group_id' => 'nullable|integer|exists:groups,id',
         ]);
 
-        $data = $request->all();
-        $data['category_id'] = $data['category_id'] ?? 0;
-
-        $exist = $this->providers->updateProvide($data, $id);
-
-        if ($exist) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Mã nhà cung cấp hoặc Tên nhà cung cấp đã tồn tại ở bản ghi khác!'
-            ], 422);
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'message' => 'Dữ liệu không hợp lệ', 'errors' => $validator->errors()], 422);
         }
 
-        $updatedProvider = $this->providers->find($id);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Cập nhật thành công',
-            'data'    => $updatedProvider
-        ]);
+        $provider->update($request->all());
+        return response()->json(['success' => true, 'message' => 'Cập nhật thành công', 'data' => $provider]);
     }
 
     /**
-     * Chi tiết nhà cung cấp
-     */
-    public function detail($id): JsonResponse
-    {
-        $provider = $this->providers->find($id);
-
-        if (!$provider) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Không tìm thấy nhà cung cấp'
-            ], 404);
-        }
-
-        return response()->json([
-            'success' => true,
-            'data'    => $provider
-        ]);
-    }
-
-    /**
-     * Xóa nhà cung cấp
+     * API: Xóa NCC
      */
     public function delete($id): JsonResponse
     {
-        $deleted = $this->providers->where('id', $id)->delete();
+        $provider = Providers::find($id);
+        if (!$provider) return response()->json(['success' => false, 'message' => 'Không tìm thấy NCC'], 404);
 
-        if ($deleted) {
-            return response()->json([
-                'success' => true,
-                'message' => 'Xóa thành công'
-            ]);
+        // Kiểm tra ràng buộc
+        $hasData = DB::table('imports')->where('provider_id', $id)->exists()
+            || DB::table('inventory_lookup')->where('provider_id', $id)->exists();
+
+        if ($hasData) {
+            return response()->json(['success' => false, 'message' => 'Không thể xóa NCC đã có giao dịch nhập hàng.'], 422);
         }
 
-        return response()->json([
-            'success' => false,
-            'message' => 'Không tìm thấy nhà cung cấp'
-        ], 404);
+        $provider->delete();
+        return response()->json(['success' => true, 'message' => 'Xóa thành công']);
     }
 
     /**
-     * Lấy danh sách nhóm thuộc loại "Nhà cung cấp" để chọn khi tạo/sửa
+     * API: Lấy nhóm NCC (Loại 2)
      */
     public function groups(): JsonResponse
     {
-        $groups = Groups::whereHas('type', function ($q) {
-            $q->where('group_name', 'Nhà cung cấp'); // hoặc where('id', 2) nếu biết ID
-        })
-            ->select('id', 'group_code', 'group_name')
-            ->orderBy('group_name')
-            ->get();
-
-        return response()->json([
-            'success' => true,
-            'data'    => $groups
-        ]);
+        $groups = Groups::where('group_type_id', 2)->select('id', 'group_name')->get();
+        return response()->json(['success' => true, 'data' => $groups]);
     }
 }

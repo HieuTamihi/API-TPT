@@ -101,4 +101,9 @@ class Product extends Model
 
         return $products->get();
     }
+
+    public function group()
+    {
+        return $this->belongsTo(Groups::class, 'group_id', 'id');
+    }
 }

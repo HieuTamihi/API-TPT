@@ -103,35 +103,29 @@ class WarehouseController extends Controller
     }
 
     /**
-     * Danh sách kho + tìm kiếm + lọc + sắp xếp + phân trang
+     * Danh sách kho (Sửa lỗi mất filter type)
      */
     public function list(Request $request): JsonResponse
     {
         $inputData = [];
 
-        // Tìm kiếm chung
-        if ($request->filled('search')) {
-            $inputData['search'] = $request->search;
-        }
-
-        // Lọc chi tiết từ modal (nếu có)
-        if ($request->filled('ma'))      $inputData['ma'] = $request->ma;
-        if ($request->filled('ten'))     $inputData['ten'] = $request->ten;
-        if ($request->filled('address')) $inputData['address'] = $request->address;
-
-        // Sắp xếp
-        if ($request->has('sort_by') && $request->has('sort_dir')) {
-            $sortMap = [
-                'code' => 'warehouse_code',
-                'name' => 'warehouse_name',
-            ];
-            $field = $sortMap[$request->sort_by] ?? 'id';
-            $inputData['sort'] = [$field, $request->sort_dir];
-        }
-
-        // Xây dựng query giống logic getAllWarehouse
+        // 1. Khởi tạo Query Builder
         $query = DB::table('warehouses');
 
+        // 2. Lấy tham số request
+        if ($request->filled('search')) $inputData['search'] = $request->search;
+        if ($request->filled('ma')) $inputData['ma'] = $request->ma;
+        if ($request->filled('ten')) $inputData['ten'] = $request->ten;
+        if ($request->filled('address')) $inputData['address'] = $request->address;
+
+        // 3. Áp dụng bộ lọc
+
+        // Lọc theo Loại kho (Sửa lỗi: Đã hoạt động vì không bị reset query)
+        if ($request->filled('type')) {
+            $query->where('type', $request->type);
+        }
+
+        // Tìm kiếm chung
         if (!empty($inputData['search'])) {
             $search = $inputData['search'];
             $query->where(function ($q) use ($search) {
@@ -141,6 +135,7 @@ class WarehouseController extends Controller
             });
         }
 
+        // Lọc chi tiết các trường khác
         $filterable = [
             'ma'      => 'warehouse_code',
             'ten'     => 'warehouse_name',
@@ -153,17 +148,23 @@ class WarehouseController extends Controller
             }
         }
 
-        if (isset($inputData['sort'])) {
-            $query->orderBy($inputData['sort'][0], $inputData['sort'][1]);
+        // 4. Sắp xếp
+        if ($request->has('sort_by') && $request->has('sort_dir')) {
+            $sortMap = [
+                'code' => 'warehouse_code',
+                'name' => 'warehouse_name',
+            ];
+            $field = $sortMap[$request->sort_by] ?? 'id';
+            $query->orderBy($field, $request->sort_dir);
         } else {
             $query->orderBy('id', 'desc');
         }
 
-        // Phân trang
+        // 5. Phân trang
         $perPage = $request->get('per_page', 20);
         $warehouses = $query->paginate($perPage);
 
-        // Format dữ liệu trả về giống frontend
+        // 6. Format dữ liệu trả về
         $data = collect($warehouses->items())->map(function ($item) {
             return [
                 'id'             => $item->id,

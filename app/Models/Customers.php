@@ -50,8 +50,8 @@ class Customers extends Model
         }
         if (isset($data['sort']) && isset($data['sort'][0])) {
             $guests = $guests->orderBy($data['sort'][0], $data['sort'][1]);
-        }else{
-            $guests = $guests->orderBy('id','desc');
+        } else {
+            $guests = $guests->orderBy('id', 'desc');
         }
         return $guests->get();
     }
@@ -86,5 +86,10 @@ class Customers extends Model
     public function updateCustomer($data, $id)
     {
         return DB::table($this->table)->where('id', $id)->update($data);
+    }
+
+    public function group()
+    {
+        return $this->belongsTo(Groups::class, 'group_id');
     }
 }

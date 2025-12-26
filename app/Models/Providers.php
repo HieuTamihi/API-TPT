@@ -132,4 +132,9 @@ class Providers extends Model
         }
         return $exist;
     }
+
+    public function group()
+    {
+        return $this->hasOne(Groups::class, 'id', 'group_id');
+    }
 }

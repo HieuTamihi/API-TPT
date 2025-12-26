@@ -176,166 +176,129 @@ class ProductController extends Controller
     }
 
     /**
-     * Danh sách sản phẩm + tìm kiếm + lọc + sắp xếp + phân trang
-     * Hỗ trợ lọc theo nhóm (group_id) nếu frontend gửi
+     * API: Danh sách Hàng hóa
      */
     public function list(Request $request): JsonResponse
     {
-        $inputData = [];
+        $query = Product::with('group');
 
-        // Tìm kiếm chung
+        // 1. Tìm kiếm chung
         if ($request->filled('search')) {
-            $inputData['search'] = $request->search;
-        }
-
-        // Lọc chi tiết
-        if ($request->filled('ma'))     $inputData['ma'] = $request->ma;
-        if ($request->filled('ten'))    $inputData['ten'] = $request->ten;
-        if ($request->filled('hang'))   $inputData['hang'] = $request->hang;
-
-        // Lọc khoảng bảo hành (min và max)
-        if ($request->filled('warranty_min') || $request->filled('warranty_max')) {
-            $min = $request->get('warranty_min', 0);
-            $max = $request->get('warranty_max', 999);
-            $inputData['bao_hanh'] = [$min, $max]; // tương thích với logic model
-        }
-
-        // Sắp xếp
-        if ($request->has('sort_by') && $request->has('sort_dir')) {
-            $sortMap = [
-                'code' => 'product_code',
-                'name' => 'product_name',
-                'brand' => 'brand',
-            ];
-            $field = $sortMap[$request->sort_by] ?? 'id';
-            $inputData['sort'] = [$field, $request->sort_dir]; // asc/desc
-        }
-
-        // Lọc theo nhóm hàng hóa (nếu frontend gửi group_id)
-        $groupId = $request->get('group_id');
-
-        // Xây dựng query giống logic getAllProducts
-        $query = DB::table('products');
-
-        if (!empty($inputData['search'])) {
-            $search = $inputData['search'];
+            $search = $request->search;
             $query->where(function ($q) use ($search) {
                 $q->where('product_code', 'like', "%{$search}%")
-                  ->orWhere('product_name', 'like', "%{$search}%")
-                  ->orWhere('brand', 'like', "%{$search}%");
+                    ->orWhere('product_name', 'like', "%{$search}%")
+                    ->orWhere('brand', 'like', "%{$search}%");
             });
         }
 
-        $filterable = [
-            'ma'   => 'product_code',
-            'ten'  => 'product_name',
-            'hang' => 'brand',
-        ];
+        // 2. Lọc chi tiết
+        if ($request->filled('ma')) $query->where('product_code', 'like', "%{$request->ma}%");
+        if ($request->filled('ten')) $query->where('product_name', 'like', "%{$request->ten}%");
+        if ($request->filled('brand')) $query->where('brand', 'like', "%{$request->brand}%");
+        if ($request->filled('group_id')) $query->where('group_id', $request->group_id);
 
-        foreach ($filterable as $key => $field) {
-            if (!empty($inputData[$key])) {
-                $query->where($field, 'like', "%{$inputData[$key]}%");
-            }
-        }
-
-        // Lọc bảo hành
-        if (isset($inputData['bao_hanh'])) {
-            $query->whereBetween('warranty', $inputData['bao_hanh']);
-        }
-
-        // Lọc theo nhóm
-        if ($groupId && $groupId > 0) {
-            $query->where('group_id', $groupId);
-        }
-
-        // Sắp xếp
-        if (isset($inputData['sort'])) {
-            $query->orderBy($inputData['sort'][0], $inputData['sort'][1]);
+        // 3. Sắp xếp
+        if ($request->has('sort_by') && $request->has('sort_dir')) {
+            $sortBy = $request->sort_by;
+            if ($sortBy === 'code') $sortBy = 'product_code';
+            if ($sortBy === 'name') $sortBy = 'product_name';
+            $query->orderBy($sortBy, $request->sort_dir);
         } else {
             $query->orderBy('id', 'desc');
         }
 
-        // Phân trang
+        // 4. Phân trang
         $perPage = $request->get('per_page', 20);
         $products = $query->paginate($perPage);
 
-        // Đếm tổng số lượng (cho footer: SL hàng hoá)
-        $totalCount = $groupId ? 
-            DB::table('products')->where('group_id', $groupId)->count() : 
-            DB::table('products')->count();
-
-        // Format dữ liệu
-        $data = collect($products->items())->map(function ($item) {
-            return [
-                'id'           => $item->id,
-                'code'         => $item->product_code,
-                'name'         => $item->product_name,
-                'brand'        => $item->brand ?? '',
-                'warranty'     => $item->warranty,
-                'group_id'     => $item->group_id,
-            ];
-        });
-
         return response()->json([
             'success' => true,
-            'data'    => $data,
-            'total'   => $totalCount, // Dùng cho footer: SL hàng hoá
+            'data' => $products->items(),
             'pagination' => [
                 'current_page' => $products->currentPage(),
-                'last_page'    => $products->lastPage(),
-                'per_page'     => $products->perPage(),
-                'total'        => $products->total(),
+                'last_page' => $products->lastPage(),
+                'per_page' => $products->perPage(),
+                'total' => $products->total(),
             ]
         ]);
     }
 
     /**
-     * Xóa sản phẩm
+     * API: Thêm mới Hàng hóa
      */
-    public function delete($id): JsonResponse
+    public function add(Request $request): JsonResponse
     {
-        $product = $this->products->find($id);
-
-        if (!$product) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Không tìm thấy sản phẩm'
-            ], 404);
-        }
-
-        // Kiểm tra có serial hoặc tồn kho không trước khi xóa (tùy nghiệp vụ)
-        // Ví dụ: nếu có serial thì không cho xóa
-        $hasSerial = DB::table('serial_numbers')->where('product_id', $id)->exists();
-        if ($hasSerial) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Không thể xóa sản phẩm đã có serial/phiếu nhập xuất'
-            ], 422);
-        }
-
-        $product->delete();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Xóa sản phẩm thành công'
+        $validator = Validator::make($request->all(), [
+            'product_code' => 'required|string|max:50|unique:products,product_code',
+            'product_name' => 'required|string|max:255',
+            'group_id' => 'nullable|integer|exists:groups,id',
+            'brand' => 'nullable|string|max:100',
+            'warranty' => 'nullable|integer|min:0', // Tháng bảo hành
         ]);
+
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'message' => 'Dữ liệu không hợp lệ', 'errors' => $validator->errors()], 422);
+        }
+
+        try {
+            $product = Product::create($request->all());
+            return response()->json(['success' => true, 'message' => 'Thêm hàng hóa thành công', 'data' => $product], 201);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => 'Lỗi: ' . $e->getMessage()], 500);
+        }
     }
 
     /**
-     * Lấy danh sách nhóm thuộc loại "Hàng hóa" (group_types.id = 3)
+     * API: Cập nhật Hàng hóa
+     */
+    public function change(Request $request, $id): JsonResponse
+    {
+        $product = Product::find($id);
+        if (!$product) return response()->json(['success' => false, 'message' => 'Không tìm thấy hàng hóa'], 404);
+
+        $validator = Validator::make($request->all(), [
+            'product_code' => 'required|string|max:50|unique:products,product_code,' . $id,
+            'product_name' => 'required|string|max:255',
+            'group_id' => 'nullable|integer|exists:groups,id',
+            'warranty' => 'nullable|integer|min:0',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'message' => 'Dữ liệu không hợp lệ', 'errors' => $validator->errors()], 422);
+        }
+
+        $product->update($request->all());
+        return response()->json(['success' => true, 'message' => 'Cập nhật thành công', 'data' => $product]);
+    }
+
+    /**
+     * API: Xóa Hàng hóa
+     */
+    public function delete($id): JsonResponse
+    {
+        $product = Product::find($id);
+        if (!$product) return response()->json(['success' => false, 'message' => 'Không tìm thấy hàng hóa'], 404);
+
+        // Kiểm tra ràng buộc: Đã có Serial, đã nhập kho, xuất kho...
+        $hasData = $product->serialNumbers()->exists()
+            || DB::table('product_import')->where('product_id', $id)->exists()
+            || DB::table('product_export')->where('product_id', $id)->exists();
+
+        if ($hasData) {
+            return response()->json(['success' => false, 'message' => 'Không thể xóa hàng hóa đã phát sinh giao dịch.'], 422);
+        }
+
+        $product->delete();
+        return response()->json(['success' => true, 'message' => 'Xóa thành công']);
+    }
+
+    /**
+     * API: Lấy nhóm Hàng hóa (Loại 3)
      */
     public function groups(): JsonResponse
     {
-        $groups = Groups::whereHas('type', function ($q) {
-            $q->where('group_name', 'Hàng hóa'); // hoặc where('id', 3)
-        })
-            ->select('id', 'group_code', 'group_name')
-            ->orderBy('group_name')
-            ->get();
-
-        return response()->json([
-            'success' => true,
-            'data'    => $groups
-        ]);
+        $groups = Groups::where('group_type_id', 3)->select('id', 'group_name')->get();
+        return response()->json(['success' => true, 'data' => $groups]);
     }
 }

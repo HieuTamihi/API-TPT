@@ -168,4 +168,9 @@ class Groups extends Model
         }
         return $groups->get();
     }
+
+    public function type()
+    {
+        return $this->belongsTo(GroupTypeMain::class, 'group_type_id', 'id');
+    }
 }

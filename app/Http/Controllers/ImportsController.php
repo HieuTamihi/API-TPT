@@ -20,11 +20,14 @@ use App\Models\User;
 use App\Notifications\InventoryLookupNotification;
 use Carbon\Carbon;
 use DateTime;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Notifications\DatabaseNotification;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
+use Maatwebsite\Excel\Facades\Excel;
+use App\Imports\ImportsImport;
 
 class ImportsController extends Controller
 {
@@ -694,230 +697,236 @@ class ImportsController extends Controller
     }
 
     /**
-     * 1. Lấy danh sách phiếu nhập (Có tìm kiếm, lọc, phân trang)
+     * 1. DANH SÁCH (API)
      */
-    public function list(Request $request)
+    public function list(Request $request): JsonResponse
     {
+        $query = Imports::with(['provider', 'warehouse', 'user']);
+
+        // --- SỬA LẠI LOGIC LỌC TẠI ĐÂY ---
+
+        // 1. Mã phiếu (Frontend gửi 'ma')
+        if ($request->has('ma') && $request->ma != '') {
+            $query->where('import_code', 'like', '%' . $request->ma . '%');
+        }
+
+        // 2. Nhà cung cấp (Frontend gửi 'provider_id') - Chú ý kiểu dữ liệu
+        if ($request->has('provider_id') && $request->provider_id != '' && $request->provider_id != 'null') {
+            $query->where('provider_id', $request->provider_id);
+        }
+
+        // 3. Kho (Frontend gửi 'warehouse_id')
+        if ($request->has('warehouse_id') && $request->warehouse_id != '' && $request->warehouse_id != 'null') {
+            $query->where('warehouse_id', $request->warehouse_id);
+        }
+
+        // 4. Tìm kiếm chung (search)
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('import_code', 'like', "%{$search}%")
+                    ->orWhereHas('provider', fn($sq) => $sq->where('provider_name', 'like', "%{$search}%"));
+            });
+        }
+
+        // --------------------------------
+
+        // Sắp xếp
+        if ($request->has('sort_by')) {
+            $query->orderBy($request->sort_by, $request->sort_dir ?? 'desc');
+        } else {
+            $query->orderBy('id', 'desc');
+        }
+
+        $imports = $query->paginate($request->get('limit', 20));
+
+        return response()->json([
+            'success' => true,
+            'data' => $imports->items(),
+            'pagination' => [
+                'current_page' => $imports->currentPage(),
+                'last_page' => $imports->lastPage(),
+                'total' => $imports->total(),
+            ]
+        ]);
+    }
+
+    /**
+     * 2. CHI TIẾT (API) - Lấy cả sản phẩm con
+     */
+    public function detail($id): JsonResponse
+    {
+        // Giả sử relation là 'details' hoặc 'productImports'
+        $import = Imports::with(['provider', 'warehouse', 'user', 'productImports.product'])->find($id);
+
+        if (!$import) return response()->json(['success' => false, 'message' => 'Không tìm thấy'], 404);
+
+        return response()->json(['success' => true, 'data' => $import]);
+    }
+
+    /**
+     * 3. TẠO MỚI (API)
+     */
+    public function add(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'import_code' => 'required|unique:imports,import_code',
+            'provider_id' => 'required|exists:providers,id',
+            'warehouse_id' => 'required|exists:warehouses,id',
+            'date_create' => 'required|date',
+            // Validate mảng sản phẩm
+            'products' => 'required|array|min:1',
+            'products.*.product_id' => 'required|exists:products,id',
+            'products.*.quantity' => 'required|integer|min:1',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'message' => 'Dữ liệu lỗi', 'errors' => $validator->errors()], 422);
+        }
+
+        DB::beginTransaction();
         try {
-            $perPage = $request->input('limit', 20);
-            $data = $request->all();
-
-            // --- SỬA ĐOẠN NÀY ---
-            // Thay vì dùng $this->imports->paginateForIndex (có thể hàm này chưa join bảng)
-            // Hãy dùng Eloquent chuẩn với 'with'
-
-            $query = Imports::with([
-                'provider:id,provider_name',   // Lấy tên nhà cung cấp
-                'warehouse:id,warehouse_name', // Lấy tên kho
-                'user:id,name'                 // Lấy tên người lập
+            // Tạo phiếu cha
+            $import = Imports::create([
+                'import_code' => $request->import_code,
+                'provider_id' => $request->provider_id,
+                'warehouse_id' => $request->warehouse_id,
+                'date_create' => $request->date_create,
+                'user_id' => Auth::id() ?? 1, // Fallback ID 1
+                'note' => $request->note,
+                'contact_person' => $request->contact_person,
+                'phone' => $request->phone,
+                'address' => $request->address
             ]);
 
-            // Thêm các logic lọc (Filter) tại đây nếu cần
-            if ($request->filled('search')) {
-                $search = $request->search;
-                $query->where('import_code', 'like', "%{$search}%");
+            // Tạo sản phẩm con & Cập nhật tồn kho
+            foreach ($request->products as $item) {
+                // 1. Lưu vào bảng chi tiết (product_import)
+                DB::table('product_import')->insert([
+                    'import_id' => $import->id,
+                    'product_id' => $item['product_id'],
+                    'quantity' => $item['quantity'],
+                    'sn_id' => 0, // Tạm thời 0, nếu có serial xử lý sau
+                    'created_at' => now(),
+                    'updated_at' => now()
+                ]);
+
+                // 2. Cộng tồn kho (inventory_lookup)
+                // Logic đơn giản: Cộng thêm dòng mới hoặc update dòng cũ tùy nghiệp vụ
+                DB::table('inventory_lookup')->insert([
+                    'product_id' => $item['product_id'],
+                    'sn_id' => 0,
+                    'provider_id' => $request->provider_id,
+                    'warehouse_id' => $request->warehouse_id,
+                    'import_date' => $request->date_create,
+                    'storage_duration' => 0,
+                    'status' => 1, // Trong kho
+                    'remaining_quantity' => $item['quantity'],
+                    'import_id' => $import->id,
+                    'created_at' => now(),
+                    'updated_at' => now()
+                ]);
             }
 
-            // Sắp xếp
-            if ($request->has('sort_by') && $request->has('sort_dir')) {
-                // Logic sort...
-                $query->orderBy($request->sort_by, $request->sort_dir);
-            } else {
-                $query->orderBy('id', 'desc');
-            }
-
-            $imports = $query->paginate($perPage);
-            // --------------------
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Lấy danh sách thành công',
-                'data'    => $imports
-            ]);
+            DB::commit();
+            return response()->json(['success' => true, 'message' => 'Tạo phiếu nhập thành công']);
         } catch (\Exception $e) {
+            DB::rollBack();
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
 
     /**
-     * 2. Tạo mới phiếu nhập
+     * 4. CẬP NHẬT (API)
      */
-    public function add(Request $request)
+    public function change(Request $request, $id): JsonResponse
     {
-        // Validate dữ liệu
-        $validator = Validator::make($request->all(), [
-            'provider_id'    => 'required|exists:providers,id',
-            'date_create'    => 'required|date',
-            'phone'          => 'nullable|string',
-            'address'        => 'nullable|string',
-            'note'           => 'nullable|string',
-            'contact_person' => 'nullable|string',
-            // warehouse_id có thể lấy từ GlobalHelper hoặc request
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Dữ liệu không hợp lệ',
-                'errors'  => $validator->errors()
-            ], 422);
-        }
+        $import = Imports::find($id);
+        if (!$import) return response()->json(['success' => false, 'message' => 'Không tìm thấy'], 404);
 
         DB::beginTransaction();
         try {
-            // 1. Tự động sinh mã nếu không nhập
-            $importCode = Imports::generateImportCode();
+            $import->update($request->only(['provider_id', 'warehouse_id', 'date_create', 'note']));
 
-            // 2. Lấy warehouse_id (Ưu tiên request, nếu không thì lấy theo GlobalHelper)
-            $warehouseId = $request->input('warehouse_id', GlobalHelper::getWarehouseId() ?? 1);
+            // Nếu có gửi products lên thì xóa cũ tạo mới (Logic đơn giản hóa)
+            if ($request->has('products')) {
+                // Xóa chi tiết cũ
+                DB::table('product_import')->where('import_id', $id)->delete();
+                // Xóa tồn kho cũ liên quan import_id này (Cẩn thận logic này trong thực tế)
+                DB::table('inventory_lookup')->where('import_id', $id)->delete();
 
-            // 3. Tạo phiếu nhập
-            $import = Imports::create([
-                'import_code'    => $importCode,
-                'user_id'        => Auth::id() ?? 1, // Lấy ID người đang đăng nhập
-                'provider_id'    => $request->provider_id,
-                'date_create'    => $request->date_create,
-                'phone'          => $request->phone,
-                'address'        => $request->address,
-                'contact_person' => $request->contact_person,
-                'note'           => $request->note,
-                'warehouse_id'   => $warehouseId,
-            ]);
+                // Tạo lại (Copy logic từ add)
+                foreach ($request->products as $item) {
+                    DB::table('product_import')->insert([
+                        'import_id' => $import->id,
+                        'product_id' => $item['product_id'],
+                        'quantity' => $item['quantity'],
+                        'sn_id' => 0,
+                        'created_at' => now(),
+                        'updated_at' => now()
+                    ]);
+                    // Cộng lại tồn kho...
+                    DB::table('inventory_lookup')->insert([
+                        'product_id' => $item['product_id'],
+                        'sn_id' => 0,
+                        'provider_id' => $request->provider_id,
+                        'warehouse_id' => $request->warehouse_id,
+                        'import_date' => $request->date_create,
+                        'storage_duration' => 0,
+                        'status' => 1,
+                        'remaining_quantity' => $item['quantity'],
+                        'import_id' => $import->id,
+                        'created_at' => now(),
+                        'updated_at' => now()
+                    ]);
+                }
+            }
 
             DB::commit();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Tạo phiếu nhập thành công',
-                'data'    => $import
-            ], 201);
+            return response()->json(['success' => true, 'message' => 'Cập nhật thành công']);
         } catch (\Exception $e) {
             DB::rollBack();
-            return response()->json([
-                'success' => false,
-                'message' => 'Lỗi khi tạo phiếu: ' . $e->getMessage()
-            ], 500);
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
 
     /**
-     * 3. Xem chi tiết phiếu nhập
+     * 5. XÓA (API)
      */
-    public function detail($id)
-    {
-        // Eager load các quan hệ cần thiết: NCC, Người tạo, Kho, và Chi tiết sản phẩm nhập
-        $import = Imports::with([
-            'provider:id,provider_name,phone,address',
-            'user:id,name',
-            'warehouse:id,warehouse_name',
-            // Load chi tiết sản phẩm nhập kèm thông tin sản phẩm
-            'productImports.product:id,product_name,product_code'
-        ])->find($id);
-
-        if (!$import) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Không tìm thấy phiếu nhập'
-            ], 404);
-        }
-
-        return response()->json([
-            'success' => true,
-            'data'    => $import
-        ]);
-    }
-
-    /**
-     * 4. Cập nhật phiếu nhập
-     */
-    public function change(Request $request, $id)
+    public function delete($id): JsonResponse
     {
         $import = Imports::find($id);
-
-        if (!$import) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Không tìm thấy phiếu nhập'
-            ], 404);
-        }
-
-        // Validate
-        $validator = Validator::make($request->all(), [
-            'provider_id'    => 'sometimes|exists:providers,id',
-            'date_create'    => 'sometimes|date',
-            'phone'          => 'nullable|string',
-            'address'        => 'nullable|string',
-            'note'           => 'nullable|string',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json(['errors' => $validator->errors()], 422);
-        }
-
-        try {
-            // Cập nhật dữ liệu (chỉ cập nhật các trường được gửi lên)
-            $import->update($request->only([
-                'provider_id',
-                'date_create',
-                'phone',
-                'address',
-                'note',
-                'contact_person',
-                'warehouse_id'
-            ]));
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Cập nhật phiếu nhập thành công',
-                'data'    => $import
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Lỗi cập nhật: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * 5. Xóa phiếu nhập
-     * DELETE /api/imports/{id}
-     */
-    public function delete($id)
-    {
-        $import = Imports::find($id);
-
-        if (!$import) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Không tìm thấy phiếu nhập'
-            ], 404);
-        }
+        if (!$import) return response()->json(['success' => false], 404);
 
         DB::beginTransaction();
         try {
-            // Kiểm tra xem phiếu nhập đã có sản phẩm chi tiết chưa
-            // Nếu có thì nên cân nhắc: Xóa chi tiết trước hay chặn xóa.
-            // Ở đây tôi chọn phương án: Xóa cả chi tiết nhập (Cascade logic thủ công)
+            // Xóa chi tiết
+            DB::table('product_import')->where('import_id', $id)->delete();
+            // Xóa tồn kho đã nhập từ phiếu này
+            DB::table('inventory_lookup')->where('import_id', $id)->delete();
 
-            // 1. Xóa các dòng trong product_import liên quan (Nếu có model ProductImport)
-            // $import->productImports()->delete(); 
-
-            // 2. Xóa phiếu nhập
             $import->delete();
-
             DB::commit();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Xóa phiếu nhập thành công'
-            ]);
+            return response()->json(['success' => true, 'message' => 'Xóa thành công']);
         } catch (\Exception $e) {
             DB::rollBack();
-            return response()->json([
-                'success' => false,
-                'message' => 'Lỗi khi xóa: ' . $e->getMessage()
-            ], 500);
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
+    }
+
+    /**
+     * 6. NHẬP EXCEL (Import Excel)
+     */
+    public function importExcel(Request $request)
+    {
+        if ($request->hasFile('file')) {
+            try {
+                Excel::import(new ImportsImport, $request->file('file'));
+                return response()->json(['success' => true, 'message' => 'Import dữ liệu thành công!']);
+            } catch (\Exception $e) {
+                return response()->json(['success' => false, 'message' => 'Lỗi import: ' . $e->getMessage()], 500);
+            }
+        }
+        return response()->json(['success' => false, 'message' => 'Vui lòng chọn file'], 400);
     }
 }

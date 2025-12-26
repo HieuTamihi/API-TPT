@@ -172,6 +172,7 @@ Route::prefix('imports')->group(function () {
     Route::post('/add', [ImportsController::class, 'add']);
     Route::put('/change/{id}', [ImportsController::class, 'change']);
     Route::delete('/delete/{id}', [ImportsController::class, 'delete']);
+    Route::post('/import-excel', [ImportsController::class, 'importExcel']);
 });
 
 // === 6. XUẤT HÀNG (Exports) ===
@@ -219,20 +220,21 @@ Route::prefix('products')->group(function () {
     Route::get('/', [ProductController::class, 'list']);              // Danh sách + lọc + nhóm
     Route::delete('/{id}', [ProductController::class, 'delete']);     // Xóa sản phẩm
     // Nếu cần thêm tạo/sửa/chi tiết sau này:
-    // Route::get('/{id}', [ProductController::class, 'detail']);
-    // Route::post('/', [ProductController::class, 'add']);
-    // Route::put('/{id}', [ProductController::class, 'update']);
+    Route::get('/{id}', [ProductController::class, 'detail']);
+    Route::post('/', [ProductController::class, 'add']);
+    Route::put('/{id}', [ProductController::class, 'change']);
 });
 
 // === QUẢN LÝ NGƯỜI DÙNG / NHÂN VIÊN ===
 Route::prefix('users')->group(function () {
-    Route::get('/roles', [UserController::class, 'roles']);            // Danh sách vai trò (Spatie)
-    Route::get('/groups', [UserController::class, 'groups']);          // Nhóm nhân viên
-    Route::get('/', [UserController::class, 'list']);                 // Danh sách + lọc
-    Route::delete('/{id}', [UserController::class, 'delete']);        // Xóa nhân viên
-    // Nếu cần thêm tạo/sửa sau:
-    // Route::post('/', [UserController::class, 'store']);
-    // Route::put('/{id}', [UserController::class, 'update']);
+    Route::get('/', [UserController::class, 'list']);                 // Lấy danh sách (GET /api/users)
+    Route::post('/', [UserController::class, 'add']);               // Tạo mới (POST /api/users)
+    Route::put('/{id}', [UserController::class, 'change']);           // Cập nhật (PUT /api/users/{id})
+    Route::delete('/{id}', [UserController::class, 'delete']);        // Xóa (DELETE /api/users/{id})
+
+    // Các route phụ trợ
+    Route::get('/roles', [UserController::class, 'roles']);           // Lấy danh sách Role
+    Route::get('/groups', [UserController::class, 'groups']);         // Lấy danh sách Nhóm NV
 });
 
 // === QUẢN LÝ KHO ===

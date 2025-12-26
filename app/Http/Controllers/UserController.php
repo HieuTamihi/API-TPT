@@ -279,7 +279,8 @@ class UserController extends Controller
                 'users.phone',
                 'users.email',
                 'users.group_id',
-                'roles.name as rolename'
+                'roles.name as rolename',
+                'roles.id as role_id' // <--- THÊM DÒNG NÀY: Lấy ID vai trò
             );
 
         // Tìm kiếm chung
@@ -341,7 +342,8 @@ class UserController extends Controller
                 'id'             => $item->id,
                 'code'           => $item->employee_code ?? '--',
                 'name'           => $item->name,
-                'role'           => $item->rolename ?? 'User',
+                'role'           => $item->rolename ?? 'User', // Tên hiển thị
+                'role_id'        => $item->role_id,            // <--- THÊM DÒNG NÀY: ID để bind vào Form sửa
                 'address'        => $item->address ?? '--',
                 'phone'          => $item->phone ?? '',
                 'email'          => $item->email,
@@ -395,35 +397,144 @@ class UserController extends Controller
     }
 
     /**
-     * Lấy danh sách vai trò (roles) từ Spatie để filter
+     * API: Lấy danh sách Vai trò (Roles) cho Dropdown
      */
-    public function roles(): JsonResponse
+    public function roles()
     {
-        $roles = \Spatie\Permission\Models\Role::select('id', 'name')
-            ->orderBy('name')
-            ->get();
+        try {
+            $roles = Role::select('id', 'name')->get();
 
-        return response()->json([
-            'success' => true,
-            'data'    => $roles
-        ]);
+            return response()->json([
+                'success' => true,
+                'data' => $roles
+            ]);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
     }
 
     /**
-     * Lấy danh sách nhóm thuộc loại "Nhân viên" (group_types.id = 4)
+     * API: Lấy danh sách Nhóm nhân viên (Groups) cho Dropdown
      */
-    public function groups(): JsonResponse
+    public function groups()
     {
-        $groups = Groups::whereHas('type', function ($q) {
-            $q->where('group_name', 'Nhân viên'); // hoặc where('id', 4)
-        })
-            ->select('id', 'group_code', 'group_name')
-            ->orderBy('group_name')
-            ->get();
+        try {
+            // Lấy nhóm có type = 4 (Nhân viên) như logic trong hàm index của bạn
+            $groups = Groups::where('group_type_id', 4)
+                ->select('id', 'group_name', 'group_code')
+                ->get();
 
-        return response()->json([
-            'success' => true,
-            'data'    => $groups
+            return response()->json([
+                'success' => true,
+                'data' => $groups
+            ]);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    public function add(Request $request)
+    {
+        // 1. Validate
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'email' => 'required|email|unique:users,email',
+            'password' => 'required|string|min:6',
+            'group_id' => 'nullable|integer',
+            'employee_code' => 'nullable|string',
+            'role' => 'nullable|integer|exists:roles,id', // ID của role
+            'address' => 'nullable|string',
+            'phone' => 'nullable|string',
         ]);
+
+        // 2. Create User
+        $user = User::create([
+            'name' => $validated['name'],
+            'email' => $validated['email'],
+            'password' => bcrypt($validated['password']),
+            'group_id' => $validated['group_id'] ?? 0,
+            'employee_code' => $validated['employee_code'],
+            'address' => $validated['address'],
+            'phone' => $validated['phone'],
+            'status' => 0, // Mặc định active
+        ]);
+
+        // 3. Assign Role (Spatie)
+        if (!empty($validated['role'])) {
+            $role = Role::findById($validated['role']);
+            if ($role) {
+                // Xóa role cũ trước khi gán mới (để chắc chắn 1 user 1 role)
+                $user->syncRoles([$role->name]);
+            }
+        }
+
+        // 4. Trả về kết quả (Quan trọng cho App)
+        // Nếu là API request (App gọi), trả về JSON
+        if ($request->wantsJson() || $request->is('api/*')) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Tạo nhân viên thành công',
+                'data' => $user
+            ], 201);
+        }
+
+        // Nếu là Web gọi, redirect về trang index
+        return redirect()->route('users.index');
+    }
+
+    public function change(Request $request, $id) // Sửa tham số thành $id cho linh hoạt
+    {
+        $user = User::findOrFail($id);
+
+        // 1. Validate
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'email' => 'required|email|unique:users,email,' . $user->id,
+            'password' => 'nullable|string|min:6',
+            'group_id' => 'nullable|integer',
+            'employee_code' => 'nullable|string',
+            'role' => 'nullable|integer|exists:roles,id',
+            'address' => 'nullable|string',
+            'phone' => 'nullable|string',
+        ]);
+
+        // 2. Prepare Data Update
+        $dataToUpdate = [
+            'name' => $validated['name'],
+            'email' => $validated['email'],
+            'group_id' => $validated['group_id'] ?? $user->group_id,
+            'employee_code' => $validated['employee_code'],
+            'address' => $validated['address'],
+            'phone' => $validated['phone'],
+        ];
+
+        // Chỉ update password nếu có nhập mới
+        if (!empty($validated['password'])) {
+            $dataToUpdate['password'] = bcrypt($validated['password']);
+        }
+
+        $user->update($dataToUpdate);
+
+        // 3. Sync Role
+        if (!empty($validated['role'])) {
+            $role = Role::findById($validated['role']);
+            if ($role) {
+                $user->syncRoles([$role->name]);
+            }
+        } else {
+            // Nếu muốn cho phép user không có role thì bỏ comment dòng dưới
+            // $user->syncRoles([]); 
+        }
+
+        // 4. Trả về kết quả
+        if ($request->wantsJson() || $request->is('api/*')) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Cập nhật nhân viên thành công',
+                'data' => $user
+            ]);
+        }
+
+        return redirect()->route('users.index')->with('success', 'User updated successfully!');
     }
 }

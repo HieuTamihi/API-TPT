@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Maatwebsite\Excel\Facades\Excel;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Validator;
 
 class CustomersController extends Controller
 {
@@ -224,191 +225,146 @@ class CustomersController extends Controller
     }
 
     /**
-     * Danh sách khách hàng + tìm kiếm + lọc + sắp xếp + phân trang
+     * API: Lấy danh sách khách hàng (Tìm kiếm + Lọc + Phân trang)
      */
     public function list(Request $request): JsonResponse
     {
-        // Chuẩn bị dữ liệu đầu vào theo đúng format mà method getAllGuest đang mong đợi
-        $inputData = [];
+        // Khởi tạo query với relation group
+        $query = Customers::with('group');
 
-        // Tìm kiếm chung
+        // 1. Tìm kiếm chung (Mã, Tên, SĐT, Email)
         if ($request->filled('search')) {
-            $inputData['search'] = $request->search;
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('customer_code', 'like', "%{$search}%")
+                    ->orWhere('customer_name', 'like', "%{$search}%")
+                    ->orWhere('phone', 'like', "%{$search}%")
+                    ->orWhere('email', 'like', "%{$search}%");
+            });
         }
 
-        // Các bộ lọc chi tiết từ modal filter
-        if ($request->filled('ma')) $inputData['ma'] = $request->ma;
-        if ($request->filled('ten')) $inputData['ten'] = $request->ten;
-        if ($request->filled('address')) $inputData['address'] = $request->address;
-        if ($request->filled('phone')) $inputData['phone'] = $request->phone;
-        if ($request->filled('email')) $inputData['email'] = $request->email;
-        if ($request->filled('note')) $inputData['note'] = $request->note;
+        // 2. Các bộ lọc chi tiết
+        if ($request->filled('ma')) $query->where('customer_code', 'like', "%{$request->ma}%");
+        if ($request->filled('ten')) $query->where('customer_name', 'like', "%{$request->ten}%");
+        if ($request->filled('phone')) $query->where('phone', 'like', "%{$request->phone}%");
+        if ($request->filled('address')) $query->where('address', 'like', "%{$request->address}%");
 
-        // Sắp xếp: sort_by và sort_dir từ frontend
+        // Lọc theo nhóm khách hàng
+        if ($request->filled('group_id')) {
+            $query->where('group_id', $request->group_id);
+        }
+
+        // 3. Sắp xếp
         if ($request->has('sort_by') && $request->has('sort_dir')) {
-            $sortFieldMap = [
-                'code'     => 'customer_code',
-                'name'     => 'customer_name',
-                'address'  => 'address',
-                'phone'    => 'phone',
-                'email'    => 'email',
-            ];
-            $field = $sortFieldMap[$request->sort_by] ?? 'id';
-            $inputData['sort'] = [$field, $request->sort_dir]; // asc hoặc desc
-        }
+            $sortBy = $request->sort_by;
+            // Map tên trường nếu frontend gửi tên khác database
+            if ($sortBy === 'code') $sortBy = 'customer_code';
+            if ($sortBy === 'name') $sortBy = 'customer_name';
 
-        // Lấy dữ liệu từ model (chưa phân trang ở model → ta sẽ xử lý phân trang ở đây)
-        $query = $this->customers->newQuery();
-
-        if (!empty($inputData)) {
-            // Tái sử dụng logic tìm kiếm + lọc + sắp xếp từ model
-            // Chúng ta sẽ copy logic để hỗ trợ phân trang
-            if (isset($inputData['search'])) {
-                $search = $inputData['search'];
-                $query->where(function ($q) use ($search) {
-                    $q->where('customer_code', 'like', "%{$search}%")
-                        ->orWhere('customer_name', 'like', "%{$search}%")
-                        ->orWhere('address', 'like', "%{$search}%")
-                        ->orWhere('phone', 'like', "%{$search}%")
-                        ->orWhere('email', 'like', "%{$search}%")
-                        ->orWhere('note', 'like', "%{$search}%");
-                });
-            }
-
-            $filterable = [
-                'ma'      => 'customer_code',
-                'ten'     => 'customer_name',
-                'address' => 'address',
-                'phone'   => 'phone',
-                'email'   => 'email',
-                'note'    => 'note',
-            ];
-
-            foreach ($filterable as $key => $field) {
-                if (!empty($inputData[$key])) {
-                    $query->where($field, 'like', "%{$inputData[$key]}%");
-                }
-            }
-
-            if (isset($inputData['sort'])) {
-                $query->orderBy($inputData['sort'][0], $inputData['sort'][1]);
-            } else {
-                $query->orderBy('id', 'desc');
-            }
+            $query->orderBy($sortBy, $request->sort_dir);
         } else {
             $query->orderBy('id', 'desc');
         }
 
-        // Phân trang
+        // 4. Phân trang
         $perPage = $request->get('per_page', 20);
         $customers = $query->paginate($perPage);
 
-        // Format dữ liệu trả về giống frontend mong đợi
-        $data = collect($customers->items())->map(function ($item) {
-            return [
-                'id'              => $item->id,
-                'code'            => $item->customer_code,
-                'name'            => $item->customer_name,
-                'address'         => $item->address ?? '',
-                'contact_person'  => $item->contact_person ?? '',
-                'phone'           => $item->phone ?? '',
-                'email'           => $item->email ?? '',
-                'tax_code'        => $item->tax_code ?? '',
-                'note'            => $item->note ?? '',
-                'group_id'        => $item->group_id,
-            ];
-        });
-
         return response()->json([
             'success' => true,
-            'data'    => $data,
+            'data' => $customers->items(),
             'pagination' => [
                 'current_page' => $customers->currentPage(),
-                'last_page'    => $customers->lastPage(),
-                'per_page'     => $customers->perPage(),
-                'total'        => $customers->total(),
+                'last_page' => $customers->lastPage(),
+                'per_page' => $customers->perPage(),
+                'total' => $customers->total(),
             ]
         ]);
     }
 
     /**
-     * Tạo mới khách hàng (kiểm tra trùng mã hoặc tên)
+     * API: Thêm mới khách hàng
      */
     public function add(Request $request): JsonResponse
     {
-        $request->validate([
-            'customer_code'   => 'required|string|max:255',
-            'customer_name'   => 'required|string|max:255',
-            'group_id'        => 'nullable|integer|exists:groups,id',
-            'address'         => 'nullable|string',
-            'contact_person'  => 'nullable|string',
-            'phone'           => 'nullable|string',
-            'email'           => 'nullable|email',
-            'tax_code'        => 'nullable|string',
-            'note'            => 'nullable|string',
+        $validator = Validator::make($request->all(), [
+            'customer_code' => 'required|string|max:50|unique:customers,customer_code',
+            'customer_name' => 'required|string|max:255',
+            'phone' => 'nullable|string|max:20',
+            'email' => 'nullable|email|max:255',
+            'address' => 'nullable|string',
+            'group_id' => 'nullable|integer|exists:groups,id',
+            'tax_code' => 'nullable|string',
+            'note' => 'nullable|string',
         ]);
 
-        $data = $request->all();
-        $data['grouptype_id'] = $data['group_id'] ?? 0; // tương thích với model cũ
-
-        $exist = $this->customers->addGuest($data);
-
-        if ($exist) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Mã khách hàng hoặc Tên khách hàng đã tồn tại!'
-            ], 422);
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'message' => 'Dữ liệu không hợp lệ', 'errors' => $validator->errors()], 422);
         }
 
-        // Lấy lại bản ghi vừa tạo để trả về
-        $newCustomer = $this->customers
-            ->where('customer_code', $request->customer_code)
-            ->first();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Tạo khách hàng thành công',
-            'data'    => $newCustomer
-        ], 201);
+        try {
+            $customer = Customers::create($request->all());
+            return response()->json(['success' => true, 'message' => 'Thêm khách hàng thành công', 'data' => $customer], 201);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => 'Lỗi: ' . $e->getMessage()], 500);
+        }
     }
 
     /**
-     * Cập nhật khách hàng
+     * API: Cập nhật khách hàng
      */
     public function change(Request $request, $id): JsonResponse
     {
-        $request->validate([
-            'customer_code'   => 'required|string|max:255',
-            'customer_name'   => 'required|string|max:255',
-            'group_id'        => 'nullable|integer|exists:groups,id',
-            'address'         => 'nullable|string',
-            'contact_person'  => 'nullable|string',
-            'phone'           => 'nullable|string',
-            'email'           => 'nullable|email',
-            'tax_code'        => 'nullable|string',
-            'note'            => 'nullable|string',
+        $customer = Customers::find($id);
+        if (!$customer) return response()->json(['success' => false, 'message' => 'Không tìm thấy khách hàng'], 404);
+
+        $validator = Validator::make($request->all(), [
+            'customer_code' => 'required|string|max:50|unique:customers,customer_code,' . $id,
+            'customer_name' => 'required|string|max:255',
+            'phone' => 'nullable|string|max:20',
+            'email' => 'nullable|email|max:255',
+            'group_id' => 'nullable|integer|exists:groups,id',
         ]);
 
-        $data = $request->all();
-        if ($request->has('group_id')) {
-            $data['group_id'] = $request->group_id;
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'message' => 'Dữ liệu không hợp lệ', 'errors' => $validator->errors()], 422);
         }
 
-        $updated = $this->customers->updateCustomer($data, $id);
+        try {
+            $customer->update($request->all());
+            return response()->json(['success' => true, 'message' => 'Cập nhật thành công', 'data' => $customer]);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => 'Lỗi: ' . $e->getMessage()], 500);
+        }
+    }
 
-        if ($updated) {
-            $customer = $this->customers->find($id);
-            return response()->json([
-                'success' => true,
-                'message' => 'Cập nhật thành công',
-                'data'    => $customer
-            ]);
+    /**
+     * API: Xóa khách hàng
+     */
+    public function detele($id): JsonResponse
+    {
+        $customer = Customers::find($id);
+        if (!$customer) return response()->json(['success' => false, 'message' => 'Không tìm thấy khách hàng'], 404);
+
+        // Kiểm tra ràng buộc dữ liệu (Ví dụ: đã có phiếu xuất, phiếu thu...)
+        $hasData = DB::table('exports')->where('customer_id', $id)->exists()
+            || DB::table('quotations')->where('customer_id', $id)->exists();
+
+        if ($hasData) {
+            return response()->json(['success' => false, 'message' => 'Không thể xóa khách hàng đã có giao dịch.'], 422);
         }
 
-        return response()->json([
-            'success' => false,
-            'message' => 'Không tìm thấy khách hàng'
-        ], 404);
+        $customer->delete();
+        return response()->json(['success' => true, 'message' => 'Xóa khách hàng thành công']);
+    }
+
+    /**
+     * API: Lấy danh sách nhóm khách hàng (Loại 1)
+     */
+    public function groups(): JsonResponse
+    {
+        $groups = Groups::where('group_type_id', 1)->select('id', 'group_name')->get();
+        return response()->json(['success' => true, 'data' => $groups]);
     }
 
     /**
@@ -428,44 +384,6 @@ class CustomersController extends Controller
         return response()->json([
             'success' => true,
             'data'    => $customer
-        ]);
-    }
-
-    /**
-     * Xóa khách hàng (nếu cần)
-     */
-    public function detele($id): JsonResponse
-    {
-        $deleted = $this->customers->where('id', $id)->delete();
-
-        if ($deleted) {
-            return response()->json([
-                'success' => true,
-                'message' => 'Xóa thành công'
-            ]);
-        }
-
-        return response()->json([
-            'success' => false,
-            'message' => 'Không tìm thấy khách hàng'
-        ], 404);
-    }
-
-    /**
-     * Lấy danh sách nhóm thuộc loại "Khách hàng" để chọn khi tạo/sửa
-     */
-    public function groups(): JsonResponse
-    {
-        $groups = Groups::whereHas('type', function ($q) {
-            $q->where('group_name', 'Khách hàng'); // hoặc where('id', 1)
-        })
-            ->select('id', 'group_code', 'group_name')
-            ->orderBy('group_name')
-            ->get();
-
-        return response()->json([
-            'success' => true,
-            'data'    => $groups
         ]);
     }
 }
