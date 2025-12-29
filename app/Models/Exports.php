@@ -105,47 +105,35 @@ class Exports extends Model
     private function buildIndexQuery(array $data)
     {
         $warehouse_id = GlobalHelper::getWarehouseId();
-        $exports = Exports::with(['user', 'customer'])
+        $exports = Exports::with(['user:id,name', 'customer:id,customer_name'])
             ->leftJoin('users', 'users.id', '=', 'exports.user_id')
             ->leftJoin('customers', 'customers.id', '=', 'exports.customer_id')
-            ->select(
-                'exports.*',
-                'users.name as username',
-                'customers.customer_name as customername'
-            );
+            ->select('exports.*', 'users.name as username', 'customers.customer_name as customername');
 
         if ($warehouse_id) {
             $exports->where('exports.warehouse_id', $warehouse_id);
         }
 
-        // Text search across exports and existence in related tables without joining them
+        // TÌM KIẾM TỔNG QUÁT (Search bar trên mobile)
         if (!empty($data['search'])) {
             $search = $data['search'];
             $exports->where(function ($query) use ($search) {
                 $query->where('exports.export_code', 'like', "%{$search}%")
                     ->orWhere('exports.note', 'like', "%{$search}%")
+                    ->orWhere('customers.customer_name', 'like', "%{$search}%")
                     ->orWhereExists(function ($sub) use ($search) {
                         $sub->from('product_export')
                             ->leftJoin('serial_numbers', 'serial_numbers.id', '=', 'product_export.sn_id')
-                            ->whereColumn('product_export.export_id', 'exports.id')
-                            ->where('serial_numbers.serial_code', 'like', "%{$search}%");
-                    })
-                    ->orWhereExists(function ($sub) use ($search) {
-                        $sub->from('product_export')
                             ->leftJoin('products', 'products.id', '=', 'product_export.product_id')
                             ->whereColumn('product_export.export_id', 'exports.id')
-                            ->where('products.product_name', 'like', "%{$search}%");
-                    })
-                    ->orWhereExists(function ($sub) use ($search) {
-                        $sub->from('product_export')
-                            ->leftJoin('products', 'products.id', '=', 'product_export.product_id')
-                            ->whereColumn('product_export.export_id', 'exports.id')
-                            ->where('products.product_code', 'like', "%{$search}%");
+                            ->where('serial_numbers.serial_code', 'like', "%{$search}%")
+                            ->orWhere('products.product_name', 'like', "%{$search}%")
+                            ->orWhere('products.product_code', 'like', "%{$search}%");
                     });
             });
         }
 
-        // Individual filters using EXISTS
+        // LỌC CHUYÊN SÂU (Advanced Filter)
         if (!empty($data['ma'])) {
             $exports->where('exports.export_code', 'like', "%{$data['ma']}%");
         }
@@ -153,60 +141,21 @@ class Exports extends Model
             $serial = $data['serial'];
             $exports->whereExists(function ($sub) use ($serial) {
                 $sub->from('product_export')
-                    ->leftJoin('serial_numbers', 'serial_numbers.id', '=', 'product_export.sn_id')
+                    ->join('serial_numbers', 'serial_numbers.id', '=', 'product_export.sn_id')
                     ->whereColumn('product_export.export_id', 'exports.id')
                     ->where('serial_numbers.serial_code', 'like', "%{$serial}%");
             });
         }
-        if (!empty($data['product_name'])) {
-            $productName = $data['product_name'];
-            $exports->whereExists(function ($sub) use ($productName) {
-                $sub->from('product_export')
-                    ->leftJoin('products', 'products.id', '=', 'product_export.product_id')
-                    ->whereColumn('product_export.export_id', 'exports.id')
-                    ->where('products.product_name', 'like', "%{$productName}%");
-            });
-        }
-        if (!empty($data['product_code'])) {
-            $productCode = $data['product_code'];
-            $exports->whereExists(function ($sub) use ($productCode) {
-                $sub->from('product_export')
-                    ->leftJoin('products', 'products.id', '=', 'product_export.product_id')
-                    ->whereColumn('product_export.export_id', 'exports.id')
-                    ->where('products.product_code', 'like', "%{$productCode}%");
-            });
-        }
-        if (!empty($data['note'])) {
-            $exports->where('exports.note', 'like', "%{$data['note']}%");
-        }
-        if (!empty($data['date'][0]) && !empty($data['date'][1])) {
-            $dateStart = Carbon::parse($data['date'][0]);
-            $dateEnd = Carbon::parse($data['date'][1])->endOfDay();
-            $exports->whereBetween('exports.date_create', [$dateStart, $dateEnd]);
-        }
-        if (!empty($data['customer']) && is_array($data['customer'])) {
-            $exports->whereIn('exports.customer_id', $data['customer']);
-        }
-        if (!empty($data['user']) && is_array($data['user'])) {
-            $exports->whereIn('exports.user_id', $data['user']);
+        if (!empty($data['date']) && is_array($data['date'])) {
+            $start = Carbon::parse($data['date'][0])->startOfDay();
+            $end = Carbon::parse($data['date'][1] ?? $data['date'][0])->endOfDay();
+            $exports->whereBetween('exports.date_create', [$start, $end]);
         }
 
-        // Sorting mapping
-        if (!empty($data['sort'][0])) {
-            $sortBy = $data['sort'][0];
-            $sortDir = !empty($data['sort'][1]) ? $data['sort'][1] : 'DESC';
-            $sortMap = [
-                'export_code' => 'exports.export_code',
-                'date_create' => 'exports.date_create',
-                'customername' => 'customers.customer_name',
-                'username' => 'users.name',
-                'note' => 'exports.note',
-            ];
-            $column = $sortMap[$sortBy] ?? 'exports.id';
-            $exports->orderBy($column, $sortDir);
-        } else {
-            $exports->orderBy('exports.id', 'desc');
-        }
+        // Sắp xếp
+        $sortBy = $data['sort_by'] ?? 'id';
+        $sortDir = $data['sort_dir'] ?? 'desc';
+        $exports->orderBy("exports.$sortBy", $sortDir);
 
         return $exports;
     }

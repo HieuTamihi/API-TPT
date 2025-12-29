@@ -16,6 +16,7 @@ use App\Models\warrantyHistory;
 use App\Models\warrantyLookup;
 use Carbon\Carbon;
 use DateTime;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
@@ -608,205 +609,338 @@ class ExportsController extends Controller
     }
 
     /**
-     * 1. Danh sách phiếu xuất kho (có lọc, phân trang)
+     * 1. API Danh sách & Tìm kiếm chuyên sâu
      */
-    public function list(Request $request)
+    public function list(Request $request): JsonResponse
     {
         try {
-            // Sử dụng hàm paginateForIndex đã có trong Model để tái sử dụng logic lọc/search
-            $data = $request->all();
+            $filters = $request->only([
+                'search',
+                'ma',
+                'serial',
+                'product_name',
+                'product_code',
+                'note',
+                'date',
+                'customer',
+                'user',
+                'sort'
+            ]);
 
-            //Giới hạn số lượng
             $perPage = $request->input('limit', 20);
 
-            $exports = $this->exports->paginateForIndex($data, $perPage);
+            // Giả sử paginateForIndex đã được define trong Model Exports
+            // Nếu chưa có, bạn có thể dùng Eloquent thuần tại đây
+            $data = $this->exports->paginateForIndex($filters, $perPage);
 
             return response()->json([
-                'status' => true,
-                'message' => 'Lấy danh sách phiếu xuất thành công',
-                'data' => $exports
-            ], 200);
+                'success' => true,
+                'message' => 'Lấy danh sách thành công',
+                'data' => $data
+            ]);
         } catch (\Exception $e) {
-            return response()->json([
-                'status' => false,
-                'message' => 'Lỗi hệ thống: ' . $e->getMessage()
-            ], 500);
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
 
     /**
-     * 2. Chi tiết phiếu xuất kho
+     * 2. API Chi tiết phiếu xuất
      */
-    public function detail($id)
+    public function detail($id): JsonResponse
     {
-        try {
-            // Eager load các quan hệ để lấy đầy đủ thông tin
-            $export = Exports::with([
-                'user:id,name',
-                'customer:id,customer_name,phone,address',
-                'warehouse:id,warehouse_name',
-                'productExport',                 // Danh sách sản phẩm trong phiếu
-                'productExport.product',         // Thông tin chi tiết sản phẩm
-                'productExport.serialNumber'     // Thông tin serial (nếu có)
-            ])->find($id);
+        $export = Exports::with([
+            'user:id,name',
+            'customer:id,customer_name,phone,address',
+            'productExport.product',
+            'productExport.serialNumber'
+        ])->find($id);
 
-            if (!$export) {
-                return response()->json([
-                    'status' => false,
-                    'message' => 'Không tìm thấy phiếu xuất kho'
-                ], 404);
-            }
-
-            return response()->json([
-                'status' => true,
-                'data' => $export
-            ], 200);
-        } catch (\Exception $e) {
-            return response()->json([
-                'status' => false,
-                'message' => 'Lỗi hệ thống: ' . $e->getMessage()
-            ], 500);
+        if (!$export) {
+            return response()->json(['success' => false, 'message' => 'Không tìm thấy phiếu'], 404);
         }
+
+        return response()->json(['success' => true, 'data' => $export]);
     }
 
     /**
-     * 3. Tạo mới phiếu xuất kho
+     * 3. API Thêm mới (FIFO & Trừ kho)
      */
-    public function add(Request $request)
+    public function add(Request $request): JsonResponse
     {
-        // Validate dữ liệu đầu vào
         $validator = Validator::make($request->all(), [
-            'customer_id'    => 'required|exists:customers,id',
-            'date_create'    => 'required|date',
-            'user_id'        => 'nullable|exists:users,id', // Nếu không truyền sẽ lấy Auth user
-            'address'        => 'nullable|string',
-            'phone'          => 'nullable|string',
-            'contact_person' => 'nullable|string',
-            'note'           => 'nullable|string',
-            // 'warehouse_id' xử lý trong Model qua Helper nên không bắt buộc ở đây
+            'customer_id' => 'required|exists:customers,id',
+            'date_create' => 'required|date',
+            'products'    => 'required|array|min:1',
+            // products.*.product_id, qty, serial...
         ]);
 
         if ($validator->fails()) {
-            return response()->json([
-                'status' => false,
-                'errors' => $validator->errors()
-            ], 422);
+            return response()->json(['success' => false, 'errors' => $validator->errors()], 422);
         }
 
         DB::beginTransaction();
         try {
-            $data = $request->all();
+            $warehouse_id = GlobalHelper::getWarehouseId() ?? 1;
 
-            // Nếu không truyền user_id, lấy từ người dùng đang đăng nhập
-            if (empty($data['user_id'])) {
-                $data['user_id'] = Auth::id() ?? 1; // Fallback ID 1 nếu test không có auth
+            // Tạo phiếu xuất
+            $export = Exports::create([
+                'export_code'    => $this->exports->generateExportCode(), // Helper tự sinh mã
+                'user_id'        => Auth::id() ?? 1,
+                'customer_id'    => $request->customer_id,
+                'phone'          => $request->phone,
+                'address'        => $request->address,
+                'contact_person' => $request->contact_person,
+                'note'           => $request->note,
+                'date_create'    => $request->date_create,
+                'warehouse_id'   => $warehouse_id
+            ]);
+
+            foreach ($request->products as $item) {
+                $productId = $item['product_id'];
+                $qtyTotal  = (int)$item['qty'];
+                $serialCode = str_replace(' ', '', $item['serial'] ?? '');
+                $warranties = $item['warranty'] ?? []; // Mảng bảo hành: [[tên, tháng], ...]
+
+                $snId = 0;
+                if (!empty($serialCode)) {
+                    $sn = SerialNumber::where('serial_code', $serialCode)
+                        ->where('product_id', $productId)
+                        ->first();
+                    if (!$sn) throw new \Exception("Serial $serialCode không tồn tại hoặc sai sản phẩm.");
+                    $snId = $sn->id;
+                }
+
+                // --- TRỪ KHO (FIFO) ---
+                $qtyToExport = $qtyTotal;
+                $lookups = InventoryLookup::where('product_id', $productId)
+                    ->where('sn_id', $snId)
+                    ->where('remaining_quantity', '>', 0)
+                    ->orderBy('created_at', 'asc') // Ưu tiên lô cũ nhất
+                    ->get();
+
+                if ($lookups->sum('remaining_quantity') < $qtyTotal) {
+                    throw new \Exception("Sản phẩm ID $productId không đủ số lượng tồn kho.");
+                }
+
+                foreach ($lookups as $lookup) {
+                    if ($qtyToExport <= 0) break;
+                    $deduct = min($qtyToExport, $lookup->remaining_quantity);
+                    $lookup->decrement('remaining_quantity', $deduct);
+                    $qtyToExport -= $deduct;
+                }
+
+                // --- LƯU CHI TIẾT ---
+                ProductExport::create([
+                    'export_id'  => $export->id,
+                    'product_id' => $productId,
+                    'quantity'   => $qtyTotal,
+                    'sn_id'      => $snId,
+                    'warranty'   => json_encode($warranties),
+                    'note'       => $item['note_seri'] ?? '',
+                ]);
+
+                // Update trạng thái Serial nếu hết hàng
+                if ($snId > 0) {
+                    $rem = InventoryLookup::where('sn_id', $snId)->sum('remaining_quantity');
+                    if ($rem <= 0) {
+                        SerialNumber::where('id', $snId)->update(['status' => 2]); // 2: Đã xuất
+                    }
+                }
+
+                // --- TẠO BẢO HÀNH ---
+                if ($warehouse_id != 2 && !empty($warranties)) {
+                    foreach ($warranties as $w) {
+                        $months = (int)($w[1] ?? 0);
+                        $expire = Carbon::parse($request->date_create)->addMonthsNoOverflow($months);
+
+                        WarrantyLookup::create([
+                            'product_id'           => $productId,
+                            'sn_id'                => $snId,
+                            'customer_id'          => $request->customer_id,
+                            'export_return_date'   => $request->date_create,
+                            'warranty'             => $months,
+                            'name_warranty'        => $w[0] ?? 'Bảo hành',
+                            'status'               => 0, // 0: Đang bảo hành
+                            'warranty_expire_date' => $expire->format('Y-m-d'),
+                            'export_id'            => $export->id,
+                        ]);
+                    }
+                }
             }
-
-            // Gọi hàm addExport trong Model
-            $exportModel = new Exports();
-            $newExportId = $exportModel->addExport($data);
-
-            // Lấy lại đối tượng vừa tạo để trả về
-            $newExport = Exports::find($newExportId);
 
             DB::commit();
-            return response()->json([
-                'status' => true,
-                'message' => 'Tạo phiếu xuất kho thành công',
-                'data' => $newExport
-            ], 201);
+            return response()->json(['success' => true, 'message' => 'Tạo phiếu xuất thành công', 'data' => $export]);
         } catch (\Exception $e) {
             DB::rollBack();
-            return response()->json([
-                'status' => false,
-                'message' => 'Lỗi tạo phiếu: ' . $e->getMessage()
-            ], 500);
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
 
     /**
-     * 4. Cập nhật phiếu xuất kho
+     * 4. API Sửa (Hoàn kho cũ -> Trừ kho mới)
      */
-    public function change(Request $request, $id)
+    public function change(Request $request, $id): JsonResponse
     {
         $export = Exports::find($id);
-
-        if (!$export) {
-            return response()->json(['status' => false, 'message' => 'Không tìm thấy phiếu xuất'], 404);
-        }
-
-        $validator = Validator::make($request->all(), [
-            'customer_id'    => 'sometimes|exists:customers,id',
-            'date_create'    => 'sometimes|date',
-            'user_id'        => 'sometimes|exists:users,id',
-            'address'        => 'nullable|string',
-            'phone'          => 'nullable|string',
-            'contact_person' => 'nullable|string',
-            'note'           => 'nullable|string',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json(['status' => false, 'errors' => $validator->errors()], 422);
-        }
-
-        try {
-            // Cập nhật các trường được phép
-            $export->update($request->only([
-                'customer_id',
-                'user_id',
-                'date_create',
-                'address',
-                'phone',
-                'contact_person',
-                'note'
-            ]));
-
-            // Lưu ý: export_code và warehouse_id thường hạn chế sửa trực tiếp để đảm bảo tính toàn vẹn dữ liệu
-
-            return response()->json([
-                'status' => true,
-                'message' => 'Cập nhật phiếu xuất thành công',
-                'data' => $export
-            ], 200);
-        } catch (\Exception $e) {
-            return response()->json([
-                'status' => false,
-                'message' => 'Lỗi cập nhật: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * 5. Xóa phiếu xuất kho
-     */
-    public function delete($id)
-    {
-        $export = Exports::find($id);
-
-        if (!$export) {
-            return response()->json(['status' => false, 'message' => 'Không tìm thấy phiếu xuất'], 404);
-        }
+        if (!$export) return response()->json(['success' => false, 'message' => 'Không tìm thấy phiếu'], 404);
 
         DB::beginTransaction();
         try {
-            // 1. Xóa các sản phẩm chi tiết thuộc phiếu này trước (Nếu database không set Cascade)
-            // Giả sử tên bảng pivot/chi tiết là 'product_export'
-            DB::table('product_export')->where('export_id', $id)->delete();
+            $warehouse_id = GlobalHelper::getWarehouseId() ?? 1;
 
-            // 2. Xóa phiếu xuất
+            // --- BƯỚC 1: HOÀN TRẢ TỒN KHO CŨ ---
+            $oldDetails = ProductExport::where('export_id', $id)->get();
+            foreach ($oldDetails as $old) {
+                // Tìm lô hàng nhập gần nhất để cộng lại (LIFO hoặc logic nghiệp vụ riêng)
+                // Ở đây đơn giản là cộng vào dòng lookup mới nhất khớp điều kiện
+                $lookup = InventoryLookup::where('product_id', $old->product_id)
+                    ->where('sn_id', $old->sn_id)
+                    ->orderBy('created_at', 'desc')
+                    ->first();
+
+                if ($lookup) {
+                    $lookup->increment('remaining_quantity', $old->quantity);
+                } else {
+                    // Trường hợp hiếm: lookup bị xóa -> Tạo lookup bù (hoặc báo lỗi)
+                    // InventoryLookup::create([...]); 
+                }
+
+                if ($old->sn_id > 0) {
+                    SerialNumber::where('id', $old->sn_id)->update(['status' => 1]); // 1: Trong kho
+                }
+            }
+
+            // Xóa chi tiết & bảo hành cũ
+            ProductExport::where('export_id', $id)->delete();
+            WarrantyLookup::where('export_id', $id)->delete();
+
+            // --- BƯỚC 2: CẬP NHẬT THÔNG TIN CHUNG ---
+            $export->update($request->only(['customer_id', 'date_create', 'phone', 'address', 'contact_person', 'note']));
+
+            // --- BƯỚC 3: TRỪ TỒN KHO MỚI (Copy logic từ ADD) ---
+            if ($request->has('products')) {
+                foreach ($request->products as $item) {
+                    $productId = $item['product_id'];
+                    $qtyTotal  = (int)$item['qty'];
+                    $serialCode = str_replace(' ', '', $item['serial'] ?? '');
+                    $warranties = $item['warranty'] ?? [];
+
+                    $snId = 0;
+                    if (!empty($serialCode)) {
+                        $sn = SerialNumber::where('serial_code', $serialCode)->where('product_id', $productId)->first();
+                        $snId = $sn ? $sn->id : 0;
+                    }
+
+                    // Trừ kho FIFO
+                    $qtyToExport = $qtyTotal;
+                    $lookups = InventoryLookup::where('product_id', $productId)
+                        ->where('sn_id', $snId)
+                        ->where('remaining_quantity', '>', 0)
+                        ->orderBy('created_at', 'asc')->get();
+
+                    if ($lookups->sum('remaining_quantity') < $qtyTotal) {
+                        throw new \Exception("Sản phẩm ID $productId không đủ tồn (khi cập nhật).");
+                    }
+
+                    foreach ($lookups as $lookup) {
+                        if ($qtyToExport <= 0) break;
+                        $deduct = min($qtyToExport, $lookup->remaining_quantity);
+                        $lookup->decrement('remaining_quantity', $deduct);
+                        $qtyToExport -= $deduct;
+                    }
+
+                    ProductExport::create([
+                        'export_id'  => $id,
+                        'product_id' => $productId,
+                        'quantity'   => $qtyTotal,
+                        'sn_id'      => $snId,
+                        'warranty'   => json_encode($warranties),
+                        'note'       => $item['note_seri'] ?? ''
+                    ]);
+
+                    if ($snId > 0 && InventoryLookup::where('sn_id', $snId)->sum('remaining_quantity') <= 0) {
+                        SerialNumber::where('id', $snId)->update(['status' => 2]);
+                    }
+
+                    if ($warehouse_id != 2 && !empty($warranties)) {
+                        foreach ($warranties as $w) {
+                            $expire = Carbon::parse($request->date_create)->addMonthsNoOverflow((int)$w[1]);
+                            WarrantyLookup::create([
+                                'product_id' => $productId,
+                                'sn_id' => $snId,
+                                'customer_id' => $request->customer_id,
+                                'export_return_date' => $request->date_create,
+                                'warranty' => $w[1],
+                                'name_warranty' => $w[0],
+                                'status' => 0,
+                                'warranty_expire_date' => $expire->format('Y-m-d'),
+                                'export_id' => $id,
+                            ]);
+                        }
+                    }
+                }
+            }
+
+            DB::commit();
+            return response()->json(['success' => true, 'message' => 'Cập nhật thành công']);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * 5. API Xóa (Hoàn kho & Kiểm tra ràng buộc)
+     */
+    public function delete($id): JsonResponse
+    {
+        $export = Exports::find($id);
+        if (!$export) return response()->json(['success' => false, 'message' => 'Không tìm thấy'], 404);
+
+        DB::beginTransaction();
+        try {
+            $details = ProductExport::where('export_id', $id)->get();
+            foreach ($details as $item) {
+                // Kiểm tra ràng buộc tiếp nhận bảo hành
+                // Nếu sản phẩm này đã từng đi bảo hành (có trong received_products), không cho xóa
+                // Logic này tùy thuộc nghiệp vụ: Có thể check theo Serial
+                if ($item->sn_id > 0 && ReceivedProduct::where('serial_id', $item->sn_id)->exists()) {
+                    throw new \Exception("Không thể xóa: Sản phẩm có Serial này đã phát sinh giao dịch bảo hành.");
+                }
+
+                // Hoàn kho
+                $lookup = InventoryLookup::where('product_id', $item->product_id)
+                    ->where('sn_id', $item->sn_id)
+                    ->orderBy('created_at', 'desc')->first(); // Cộng vào dòng mới nhất
+
+                if ($lookup) {
+                    $lookup->increment('remaining_quantity', $item->quantity);
+                }
+
+                if ($item->sn_id > 0) {
+                    SerialNumber::where('id', $item->sn_id)->update(['status' => 1]);
+                }
+            }
+
+            // Xóa dữ liệu liên quan
+            // 1. Warranty History (Lịch sử bảo hành của các phiếu warranty_lookup này)
+            $wlIds = WarrantyLookup::where('export_id', $id)->pluck('id');
+            WarrantyHistory::whereIn('warranty_lookup_id', $wlIds)->delete();
+
+            // 2. Warranty Lookup
+            WarrantyLookup::where('export_id', $id)->delete();
+
+            // 3. Chi tiết xuất
+            ProductExport::where('export_id', $id)->delete();
+
+            // 4. Phiếu xuất
             $export->delete();
 
             DB::commit();
-            return response()->json([
-                'status' => true,
-                'message' => 'Xóa phiếu xuất kho và dữ liệu liên quan thành công'
-            ], 200);
+            return response()->json(['success' => true, 'message' => 'Xóa phiếu thành công']);
         } catch (\Exception $e) {
             DB::rollBack();
-            return response()->json([
-                'status' => false,
-                'message' => 'Lỗi xóa phiếu: ' . $e->getMessage()
-            ], 500);
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
 }
