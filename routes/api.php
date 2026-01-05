@@ -35,24 +35,6 @@ Route::prefix('reports')->group(function () {
     Route::get('/filter-quotation', [ReportController::class, 'filterQuotation']);
 });
 
-// === Quản Lý CHUYỂN KHO (Warehouse Transfers) ===
-Route::prefix('warehouse-transfers')->group(function () {
-    // 1. Lấy danh sách (kèm lọc, tìm kiếm)
-    Route::get('/list', [WarehouseTransferController::class, 'list']);
-
-    // 2. Chi tiết
-    Route::get('/detail/{id}', [WarehouseTransferController::class, 'detail']);
-
-    // 3. Tạo mới
-    Route::post('/add', [WarehouseTransferController::class, 'add']);
-
-    // 4. Cập nhật thông tin
-    Route::put('/change/{id}', [WarehouseTransferController::class, 'change']);
-
-    // 5. Xóa phiếu chuyển kho
-    Route::delete('/delete/{id}', [WarehouseTransferController::class, 'delete']);
-});
-
 // === Quản Lý TRẢ HÀNG (Return Forms) ===
 Route::prefix('return-forms')->group(function () {
     // 1. Lấy danh sách (kèm lọc, tìm kiếm)

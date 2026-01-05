@@ -214,23 +214,82 @@ class ReportController extends Controller
         return view('reports.export_import', compact('title', 'products'));
     }
 
-    public function reportExportImportApp()
+    /**
+     * API Báo cáo Xuất Nhập (Đã thêm bộ lọc)
+     */
+    public function reportExportImportApp(Request $request)
     {
-        $products = Product::with(['imports', 'exports'])
-            ->get()
-            ->map(function ($product) {
-                return [
-                    'product_id' => $product->id,
-                    'product_code' => $product->product_code,
-                    'product_name' => $product->product_name,
-                    'total_import' => $product->imports->sum('quantity'),
-                    'total_export' => $product->exports->sum('quantity'),
-                ];
+        // 1. Khởi tạo query Sản phẩm
+        $query = Product::query();
+
+        // 2. Lọc theo Mã hoặc Tên hàng (nếu có)
+        if ($request->filled('ma')) {
+            $query->where('product_code', 'like', '%' . $request->ma . '%');
+        }
+        if ($request->filled('ten')) {
+            $query->where('product_name', 'like', '%' . $request->ten . '%');
+        }
+
+        // 3. Lấy ngày lọc (nếu có) để lọc trong quan hệ
+        $dateStart = $request->input('date.0');
+        $dateEnd   = $request->input('date.1');
+
+        // 4. Eager Load và Tính toán
+        // Lưu ý: Logic này giả định relation 'imports' và 'exports' trỏ tới bảng chi tiết có cột 'quantity'
+        $products = $query->with(['imports' => function ($q) use ($dateStart, $dateEnd) {
+            // Nếu muốn lọc ngày, cần join bảng imports cha (tùy cấu trúc model của bạn)
+            // Tạm thời giữ nguyên logic lấy hết nếu chưa xử lý ngày sâu
+            if ($dateStart && $dateEnd) {
+                $q->whereBetween('created_at', [$dateStart . ' 00:00:00', $dateEnd . ' 23:59:59']);
+            }
+        }, 'exports' => function ($q) use ($dateStart, $dateEnd) {
+            if ($dateStart && $dateEnd) {
+                $q->whereBetween('created_at', [$dateStart . ' 00:00:00', $dateEnd . ' 23:59:59']);
+            }
+        }])->get();
+
+        // 5. Map dữ liệu & Tính tổng
+        $data = $products->map(function ($product) {
+            return [
+                'product_id'   => $product->id,
+                'product_code' => $product->product_code,
+                'product_name' => $product->product_name,
+                'total_import' => (int) $product->imports->sum('quantity'),
+                'total_export' => (int) $product->exports->sum('quantity'),
+            ];
+        });
+
+        // 6. LỌC THEO SỐ LƯỢNG (Logic quan trọng đang thiếu)
+        // Sử dụng Collection filter sau khi đã tính tổng
+
+        // Lọc Số lượng Nhập
+        if ($request->filled('so_luong_nhap')) {
+            $min = (int) ($request->so_luong_nhap[0] ?? 0);
+            // Nếu max rỗng thì lấy vô cùng lớn
+            $max = ($request->so_luong_nhap[1] !== '' && $request->so_luong_nhap[1] !== null)
+                ? (int) $request->so_luong_nhap[1]
+                : 999999999;
+
+            $data = $data->filter(function ($item) use ($min, $max) {
+                return $item['total_import'] >= $min && $item['total_import'] <= $max;
             });
+        }
+
+        // Lọc Số lượng Xuất
+        if ($request->filled('so_luong_xuat')) {
+            $min = (int) ($request->so_luong_xuat[0] ?? 0);
+            $max = ($request->so_luong_xuat[1] !== '' && $request->so_luong_xuat[1] !== null)
+                ? (int) $request->so_luong_xuat[1]
+                : 999999999;
+
+            $data = $data->filter(function ($item) use ($min, $max) {
+                return $item['total_export'] >= $min && $item['total_export'] <= $max;
+            });
+        }
 
         return response()->json([
             'status' => 'success',
-            'data' => $products
+            'data' => $data->values() // Reset key mảng (0, 1, 2...) để JSON đẹp
         ]);
     }
 
@@ -251,25 +310,92 @@ class ReportController extends Controller
         return view('reports.receipt_return', compact('title', 'products'));
     }
 
-    public function reportReceiptReturnApp()
+    /**
+     * API Báo cáo Tiếp nhận - Trả hàng (Đã tích hợp bộ lọc)
+     */
+    public function reportReceiptReturnApp(Request $request)
     {
-        $products = Product::with(['receivedProducts', 'returnProducts'])
-            ->get()
-            ->map(function ($product) {
-                return [
-                    'product_id' => $product->id,
-                    'product_code' => $product->product_code,
-                    'product_name' => $product->product_name,
-                    'total_receive' => $product->receivedProducts->sum('quantity'),
-                    'total_return' => $product->returnProducts->sum('quantity'),
-                ];
+        // 1. Khởi tạo query Sản phẩm
+        $query = Product::query();
+
+        // 2. Lọc theo Mã hoặc Tên hàng (nếu có)
+        if ($request->filled('ma')) {
+            $query->where('product_code', 'like', '%' . $request->ma . '%');
+        }
+        if ($request->filled('ten')) {
+            $query->where('product_name', 'like', '%' . $request->ten . '%');
+        }
+
+        // 3. Lấy khoảng thời gian lọc (nếu có)
+        $dateStart = $request->input('date.0');
+        $dateEnd   = $request->input('date.1');
+
+        // 4. Tính tổng số lượng Tiếp nhận và Trả hàng (kèm điều kiện ngày tháng)
+        // Sử dụng withSum để tối ưu hiệu năng thay vì lấy hết về rồi sum
+        
+        // Tính tổng Tiếp nhận (receivedProducts)
+        $query->withSum(['receivedProducts' => function ($q) use ($dateStart, $dateEnd) {
+            if ($dateStart && $dateEnd) {
+                // Giả sử lọc theo ngày tạo phiếu/dòng
+                $q->whereBetween('created_at', [$dateStart . ' 00:00:00', $dateEnd . ' 23:59:59']);
+            }
+        }], 'quantity');
+
+        // Tính tổng Trả hàng (returnProducts)
+        $query->withSum(['returnProducts' => function ($q) use ($dateStart, $dateEnd) {
+            if ($dateStart && $dateEnd) {
+                $q->whereBetween('created_at', [$dateStart . ' 00:00:00', $dateEnd . ' 23:59:59']);
+            }
+        }], 'quantity');
+
+        // Lấy dữ liệu từ DB
+        $products = $query->get();
+
+        // 5. Format dữ liệu trả về
+        // Laravel withSum sẽ tạo ra thuộc tính: {relation}_sum_{column}
+        $data = $products->map(function ($product) {
+            return [
+                'product_id'    => $product->id,
+                'product_code'  => $product->product_code,
+                'product_name'  => $product->product_name,
+                // received_products_sum_quantity là tên mặc định Laravel sinh ra
+                'total_receive' => (int) ($product->received_products_sum_quantity ?? 0),
+                // return_products_sum_quantity
+                'total_return'  => (int) ($product->return_products_sum_quantity ?? 0),
+            ];
+        });
+
+        // 6. Lọc theo khoảng Số lượng (Sau khi đã tính tổng)
+        
+        // Lọc số lượng Tiếp nhận (Dùng param 'so_luong_nhap' tương ứng với filter frontend)
+        if ($request->filled('so_luong_nhap')) {
+            $min = (int) ($request->so_luong_nhap[0] ?? 0);
+            $max = ($request->so_luong_nhap[1] !== '' && $request->so_luong_nhap[1] !== null) 
+                    ? (int) $request->so_luong_nhap[1] 
+                    : 999999999;
+
+            $data = $data->filter(function ($item) use ($min, $max) {
+                return $item['total_receive'] >= $min && $item['total_receive'] <= $max;
             });
+        }
+
+        // Lọc số lượng Trả hàng (Dùng param 'so_luong_xuat' tương ứng với filter frontend)
+        if ($request->filled('so_luong_xuat')) {
+            $min = (int) ($request->so_luong_xuat[0] ?? 0);
+            $max = ($request->so_luong_xuat[1] !== '' && $request->so_luong_xuat[1] !== null) 
+                    ? (int) $request->so_luong_xuat[1] 
+                    : 999999999;
+
+            $data = $data->filter(function ($item) use ($min, $max) {
+                return $item['total_return'] >= $min && $item['total_return'] <= $max;
+            });
+        }
 
         return response()->json([
             'status' => 'success',
-            'data' => $products
+            'data' => $data->values() // Reset key mảng về 0,1,2...
         ]);
-    }
+    } 
 
     public function reportQuotation()
     {
@@ -287,7 +413,7 @@ class ReportController extends Controller
         $quotations = Quotation::join('receiving', 'receiving.id', 'quotations.reception_id')
             ->join('return_form', 'return_form.reception_id', 'receiving.id')
             ->join('customers', 'receiving.customer_id', 'customers.id')
-            ->select('quotations.*', 'receiving.status as status_return','receiving.form_code_receiving','customers.customer_name')
+            ->select('quotations.*', 'receiving.status as status_return', 'receiving.form_code_receiving', 'customers.customer_name')
             ->get();
 
         // Kiểm tra dữ liệu có bị rỗng không

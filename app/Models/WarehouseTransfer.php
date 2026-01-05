@@ -238,4 +238,9 @@ class WarehouseTransfer extends Model
         }
         return $warehouse->get();
     }
+
+    public function items()
+    {
+        return $this->hasMany(WarehouseTransferItem::class, 'transfer_id', 'id');
+    }
 }

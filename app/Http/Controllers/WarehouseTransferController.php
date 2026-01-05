@@ -315,13 +315,15 @@ class WarehouseTransferController extends Controller
     }
 
     /**
-     * 3. CHI TIẾT
+     * API: Chi tiết phiếu chuyển (Kèm danh sách hàng hóa)
      */
     public function detail($id)
     {
-        // Tìm và load kèm thông tin liên quan
-        // $transfer = WarehouseTransfer::with(['user', 'fromWarehouse', 'toWarehouse'])->find($id);
-        $transfer = WarehouseTransfer::find($id);
+        // Eager load items và thông tin chi tiết của item (tên sp, mã serial)
+        $transfer = WarehouseTransfer::with([
+            'items.product:id,product_name,product_code',
+            'items.serialNumber:id,serial_code'
+        ])->find($id);
 
         if (!$transfer) {
             return response()->json([
@@ -337,33 +339,76 @@ class WarehouseTransferController extends Controller
     }
 
     /**
-     * 4. CẬP NHẬT (SỬA)
+     * API: Cập nhật phiếu chuyển (Sửa cả thông tin chung và danh sách hàng)
      */
-    public function change(UpdateWarehouseTransferRequest $request, $id)
+    public function change(Request $request, $id)
     {
         $transfer = WarehouseTransfer::find($id);
+        if (!$transfer) return response()->json(['success' => false, 'message' => 'Không tìm thấy phiếu'], 404);
 
-        if (!$transfer) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Không tìm thấy phiếu chuyển kho.'
-            ], 404);
-        }
-
-        // Kiểm tra logic nghiệp vụ: Ví dụ phiếu đã hoàn thành (status 1) thì không cho sửa
-        /*
-        if ($transfer->status == 1) {
-             return response()->json(['message' => 'Phiếu đã hoàn thành, không thể chỉnh sửa.'], 403);
-        }
-        */
-
-        $transfer->update($request->validated());
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Cập nhật phiếu chuyển kho thành công.',
-            'data'    => $transfer
+        // Validate cơ bản
+        $request->validate([
+            'from_warehouse_id' => 'required|exists:warehouses,id',
+            'to_warehouse_id'   => 'required|exists:warehouses,id|different:from_warehouse_id',
+            'products'          => 'nullable|array',
         ]);
+
+        DB::beginTransaction();
+        try {
+            // 1. Cập nhật thông tin chung
+            $transfer->update($request->only([
+                'from_warehouse_id',
+                'to_warehouse_id',
+                'transfer_date',
+                'status',
+                'note'
+            ]));
+
+            // 2. Xử lý danh sách hàng hóa (Nếu có gửi lên)
+            if ($request->has('products')) {
+
+                // B1: Hoàn tác tồn kho cũ (Logic phức tạp: Trả hàng từ Kho Đích về Kho Nguồn)
+                // Để đơn giản và an toàn, ta xóa hết item cũ và tạo lại item mới.
+                // Lưu ý: Trong thực tế cần check kỹ logic tồn kho tại đây.
+
+                // Xóa chi tiết cũ
+                WarehouseTransferItem::where('transfer_id', $id)->delete();
+
+                // B2: Thêm mới danh sách hàng hóa
+                foreach ($request->products as $item) {
+                    $snId = 0; // Mặc định không serial
+
+                    // Nếu có nhập serial (text), tìm ID của nó
+                    if (!empty($item['serial'])) {
+                        $sn = SerialNumber::where('serial_code', $item['serial'])
+                            ->where('product_id', $item['product_id'])
+                            ->first();
+                        $snId = $sn ? $sn->id : 0;
+                    }
+
+                    // Tạo chi tiết chuyển kho
+                    WarehouseTransferItem::create([
+                        'transfer_id'      => $id,
+                        'product_id'       => $item['product_id'],
+                        'quantity'         => $item['quantity'],
+                        'serial_number_id' => $snId,
+                        'note'             => $item['note'] ?? ''
+                    ]);
+
+                    // TODO: Cập nhật vị trí tồn kho (InventoryLookup) nếu cần thiết tại đây
+                }
+            }
+
+            DB::commit();
+            return response()->json([
+                'success' => true,
+                'message' => 'Cập nhật phiếu chuyển kho thành công.',
+                'data'    => $transfer
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
     }
 
     /**
